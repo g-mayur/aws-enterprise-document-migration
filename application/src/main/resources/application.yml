@@ -1,0 +1,13 @@
+migration:
+  source:
+    type: filesystem
+    root: ./sample-source
+  destination:
+    bucket: CHANGE_ME
+  version-policy: ALL_VERSIONS
+  manifest: ./manifest.jsonl
+  worker:
+    max-concurrency: 4 # Tune only after source and destination load testing
+    max-retries: 5
+aws:
+  region: ${AWS_REGION:us-east-1}

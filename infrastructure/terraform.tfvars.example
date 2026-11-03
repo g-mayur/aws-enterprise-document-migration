@@ -1,0 +1,4 @@
+aws_region = "us-east-1"
+project_name = "document-migration-dev"
+staging_bucket_name = "replace-with-globally-unique-staging-bucket"
+destination_bucket_name = "replace-with-globally-unique-destination-bucket"

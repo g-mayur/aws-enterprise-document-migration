@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/aws-enterprise-document-migration/manifest-v1.schema.json",
+  "title": "Document migration manifest record",
+  "type": "object",
+  "required": ["documentId", "versionId", "fileName", "relativePath", "sizeBytes", "isLatest"],
+  "properties": {
+    "documentId": {"type": "string", "minLength": 1},
+    "versionId": {"type": "string", "minLength": 1},
+    "fileName": {"type": "string", "minLength": 1},
+    "relativePath": {"type": "string", "minLength": 1},
+    "sizeBytes": {"type": "integer", "minimum": 0},
+    "expectedSha256": {"type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{64}$"},
+    "isLatest": {"type": "boolean"},
+    "metadata": {"type": "object", "additionalProperties": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
