@@ -1,4 +1,5 @@
 package io.github.awsdocmigration.util;
+import java.util.HexFormat;
 import java.io.*; import java.security.*;
 public final class Checksums { private Checksums() {}
     public static String sha256(InputStream in) throws IOException {
