@@ -14,6 +14,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Filesystem source connector.
@@ -21,15 +22,23 @@ import java.util.Set;
  * Supports lazy discovery and streaming reads of files.
  * Each discovered file is represented as one logical version.
  *
- * This connector does not enumerate historical filesystem versions.
+ * Historical filesystem versions are not enumerated.
+ *
+ * Discovery resources are released automatically when iteration
+ * completes or when the connector is closed.
  */
 public final class FilesystemSource implements DocumentSource {
 
     private final Path root;
 
+    private Stream<Path> discoveryStream;
+    private boolean closed;
+
     public FilesystemSource(Path root) {
         if (root == null) {
-            throw new IllegalArgumentException("Source root is required");
+            throw new IllegalArgumentException(
+                    "Source root is required"
+            );
         }
 
         this.root = root.toAbsolutePath().normalize();
@@ -51,6 +60,8 @@ public final class FilesystemSource implements DocumentSource {
 
     @Override
     public void validateConnection() throws IOException {
+        ensureOpen();
+
         if (!Files.isDirectory(root) || !Files.isReadable(root)) {
             throw new IOException(
                     "Source root is not a readable directory: " + root
@@ -60,57 +71,68 @@ public final class FilesystemSource implements DocumentSource {
 
     @Override
     public Iterator<DocumentRecord> discover() throws IOException {
+        ensureOpen();
 
-        final var paths = Files.walk(root);
+        closeDiscoveryStream();
 
-        final var iterator = paths
+        final Stream<Path> paths = Files.walk(root);
+        discoveryStream = paths;
+
+        final Iterator<Path> iterator = paths
                 .filter(Files::isRegularFile)
                 .iterator();
 
         return new Iterator<>() {
 
-            private boolean closed;
-
-            private void closePaths() {
-                if (!closed) {
+            private void closeThisDiscovery() {
+                if (discoveryStream == paths) {
                     paths.close();
-                    closed = true;
+                    discoveryStream = null;
                 }
             }
 
             @Override
             public boolean hasNext() {
-                boolean more = iterator.hasNext();
-
-                if (!more) {
-                    closePaths();
+                if (closed || discoveryStream != paths) {
+                    return false;
                 }
 
-                return more;
+                try {
+                    boolean more = iterator.hasNext();
+
+                    if (!more) {
+                        closeThisDiscovery();
+                    }
+
+                    return more;
+
+                } catch (RuntimeException e) {
+                    closeThisDiscovery();
+                    throw e;
+                }
             }
 
             @Override
             public DocumentRecord next() {
-
                 if (!hasNext()) {
                     throw new NoSuchElementException();
                 }
 
-                Path file = iterator.next()
-                        .toAbsolutePath()
-                        .normalize();
-
-                if (!file.startsWith(root)) {
-                    throw new SecurityException(
-                            "Path escaped source root"
-                    );
-                }
-
-                String relative = root.relativize(file)
-                        .toString()
-                        .replace('\\', '/');
-
                 try {
+                    Path file = iterator.next()
+                            .toAbsolutePath()
+                            .normalize();
+
+                    if (!file.startsWith(root)) {
+                        throw new SecurityException(
+                                "Path escaped source root"
+                        );
+                    }
+
+                    String relative = root.relativize(file)
+                            .toString()
+                            .replace('\\', '/');
+
                     return new DocumentRecord(
                             relative,
                             "filesystem-v1",
@@ -121,15 +143,24 @@ public final class FilesystemSource implements DocumentSource {
                             true,
                             Map.of()
                     );
+
                 } catch (IOException e) {
+                    closeThisDiscovery();
                     throw new UncheckedIOException(e);
+
+                } catch (RuntimeException e) {
+                    closeThisDiscovery();
+                    throw e;
                 }
             }
         };
     }
 
     @Override
-    public InputStream openStream(DocumentRecord record) throws IOException {
+    public InputStream openStream(
+            DocumentRecord record
+    ) throws IOException {
+        ensureOpen();
 
         if (record == null) {
             throw new IllegalArgumentException(
@@ -164,5 +195,28 @@ public final class FilesystemSource implements DocumentSource {
         }
 
         return Files.newInputStream(realCandidate);
+    }
+
+    @Override
+    public void close() {
+        if (!closed) {
+            closed = true;
+            closeDiscoveryStream();
+        }
+    }
+
+    private void closeDiscoveryStream() {
+        if (discoveryStream != null) {
+            discoveryStream.close();
+            discoveryStream = null;
+        }
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Filesystem source connector is already closed"
+            );
+        }
     }
 }
