@@ -1,6 +1,7 @@
 
 package io.github.awsdocmigration.engine;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,8 +18,11 @@ class ManifestReaderTest {
     @TempDir
     Path tempDir;
 
-    private String validRecord() {
-        return """
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    private String validRecord() throws Exception {
+        return mapper.writeValueAsString(
+                mapper.readTree("""
                 {
                   "documentId": "contract-0001",
                   "versionId": "v1",
@@ -31,7 +35,8 @@ class ManifestReaderTest {
                     "department": "legal"
                   }
                 }
-                """;
+                """)
+        );
     }
 
     private Path createManifest(String content) throws IOException {
@@ -42,7 +47,7 @@ class ManifestReaderTest {
 
     @Test
     void readsValidRecord() throws Exception {
-        Path manifest = createManifest(validRecord());
+        Path manifest = createManifest(validRecord() + "\n");
 
         try (ManifestReader reader = new ManifestReader(manifest)) {
             Iterator<DocumentRecord> iterator = reader.iterator();
@@ -64,10 +69,8 @@ class ManifestReaderTest {
 
     @Test
     void skipsBlankLinesAndComments() throws Exception {
-        String content = """
-                # Migration manifest
-                  
-                """ + validRecord();
+        String content = "# Migration manifest\n\n"
+                + validRecord() + "\n";
 
         Path manifest = createManifest(content);
 
@@ -82,11 +85,7 @@ class ManifestReaderTest {
 
     @Test
     void rejectsMalformedJsonWithLineNumber() throws Exception {
-        String content = """
-                # Header
-
-                { invalid json }
-                """;
+        String content = "# Header\n\n{ invalid json }\n";
 
         Path manifest = createManifest(content);
 
@@ -105,10 +104,7 @@ class ManifestReaderTest {
     @Test
     void rejectsMissingRequiredFields() throws Exception {
         String content = """
-                {
-                  "documentId": "contract-0001",
-                  "versionId": "v1"
-                }
+                {"documentId":"contract-0001","versionId":"v1"}
                 """;
 
         Path manifest = createManifest(content);
@@ -128,8 +124,8 @@ class ManifestReaderTest {
     @Test
     void rejectsIncorrectFieldTypes() throws Exception {
         String content = validRecord().replace(
-                "\"isLatest\": true",
-                "\"isLatest\": \"true\""
+                "\"isLatest\":true",
+                "\"isLatest\":\"true\""
         );
 
         Path manifest = createManifest(content);
@@ -149,8 +145,8 @@ class ManifestReaderTest {
     @Test
     void rejectsUnknownFields() throws Exception {
         String content = validRecord().replace(
-                "\"isLatest\": true",
-                "\"isLatest\": true,\n\"unexpectedField\": \"value\""
+                "\"isLatest\":true",
+                "\"isLatest\":true,\"unexpectedField\":\"value\""
         );
 
         Path manifest = createManifest(content);
