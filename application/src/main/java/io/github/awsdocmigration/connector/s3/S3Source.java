@@ -20,14 +20,6 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
-/**
- * Amazon S3 source connector.
- *
- * Discovers current objects under a configured prefix.
- * Historical S3 object versions are not enumerated by this implementation.
- *
- * The S3Client is externally managed and is not closed by this connector.
- */
 public final class S3Source implements DocumentSource {
 
     private final S3Client s3;
@@ -40,11 +32,15 @@ public final class S3Source implements DocumentSource {
             String prefix
     ) {
         if (s3 == null) {
-            throw new IllegalArgumentException("S3 client is required");
+            throw new IllegalArgumentException(
+                    "S3 client is required"
+            );
         }
 
         if (bucket == null || bucket.isBlank()) {
-            throw new IllegalArgumentException("Source bucket is required");
+            throw new IllegalArgumentException(
+                    "Source bucket is required"
+            );
         }
 
         this.s3 = s3;
@@ -80,38 +76,62 @@ public final class S3Source implements DocumentSource {
 
         return new Iterator<>() {
 
-            private String token;
+            private String continuationToken;
 
-            private Iterator<S3Object> page =
+            private Iterator<S3Object> currentPage =
                     List.<S3Object>of().iterator();
 
             private boolean finished;
 
-            private void fill() {
+            private void loadNextPage() {
 
-                while (!page.hasNext() && !finished) {
+                while (!currentPage.hasNext() && !finished) {
 
                     ListObjectsV2Response response =
                             s3.listObjectsV2(
                                     ListObjectsV2Request.builder()
                                             .bucket(bucket)
                                             .prefix(prefix)
-                                            .continuationToken(token)
+                                            .continuationToken(
+                                                    continuationToken
+                                            )
                                             .build()
                             );
 
-                    page = response.contents().iterator();
+                    String nextToken =
+                            response.nextContinuationToken();
 
-                    token = response.nextContinuationToken();
+                    if (response.isTruncated()) {
 
-                    finished = token == null;
+                        if (nextToken == null
+                                || nextToken.isBlank()) {
+                            throw new IllegalStateException(
+                                    "S3 returned a truncated listing "
+                                            + "without a continuation token"
+                            );
+                        }
+
+                        if (nextToken.equals(continuationToken)) {
+                            throw new IllegalStateException(
+                                    "S3 returned a repeated continuation token"
+                            );
+                        }
+                    }
+
+                    continuationToken = nextToken;
+                    finished = !response.isTruncated();
+
+                    currentPage = response.contents()
+                            .stream()
+                            .filter(S3Source.this::isDocumentObject)
+                            .iterator();
                 }
             }
 
             @Override
             public boolean hasNext() {
-                fill();
-                return page.hasNext();
+                loadNextPage();
+                return currentPage.hasNext();
             }
 
             @Override
@@ -121,18 +141,18 @@ public final class S3Source implements DocumentSource {
                     throw new NoSuchElementException();
                 }
 
-                S3Object object = page.next();
+                S3Object object = currentPage.next();
 
                 String key = object.key();
 
-                String name = key.substring(
+                String fileName = key.substring(
                         key.lastIndexOf('/') + 1
                 );
 
                 return new DocumentRecord(
                         key,
                         "s3-current",
-                        name,
+                        fileName,
                         key,
                         object.size(),
                         null,
@@ -141,6 +161,18 @@ public final class S3Source implements DocumentSource {
                 );
             }
         };
+    }
+
+    private boolean isDocumentObject(S3Object object) {
+
+        String key = object.key();
+
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+
+        // Ignore conventional zero-byte S3 folder-marker objects.
+        return !(key.endsWith("/") && object.size() == 0);
     }
 
     @Override
@@ -154,9 +186,11 @@ public final class S3Source implements DocumentSource {
             );
         }
 
-        String recordBucket = record.metadata().get("sourceBucket");
+        String recordBucket =
+                record.metadata().get("sourceBucket");
 
-        if (recordBucket != null && !bucket.equals(recordBucket)) {
+        if (recordBucket != null
+                && !bucket.equals(recordBucket)) {
             throw new SecurityException(
                     "Document record belongs to a different S3 bucket"
             );
