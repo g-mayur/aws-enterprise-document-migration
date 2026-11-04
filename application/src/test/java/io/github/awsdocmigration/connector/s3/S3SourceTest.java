@@ -176,20 +176,20 @@ class S3SourceTest {
 
         Iterator<DocumentRecord> records = source.discover();
 
+        // The first page must be available.
         assertEquals(
                 "documents/first.pdf",
                 records.next().relativePath()
         );
 
-        assertEquals(
-                "documents/second.pdf",
-                records.next().relativePath()
-        );
-
+        // Loading the second page must fail because S3 repeated its token.
         assertThrows(
                 IllegalStateException.class,
                 records::hasNext
         );
+
+        verify(s3, times(2))
+                .listObjectsV2(any(ListObjectsV2Request.class));
     }
 
     @Test
