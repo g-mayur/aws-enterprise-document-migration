@@ -1,46 +1,271 @@
+
 package io.github.awsdocmigration;
 
 import io.github.awsdocmigration.connector.DocumentSource;
 import io.github.awsdocmigration.connector.filesystem.FilesystemSource;
 import io.github.awsdocmigration.connector.s3.S3Source;
-import io.github.awsdocmigration.domain.*;
-import io.github.awsdocmigration.engine.*;
-import io.github.awsdocmigration.storage.*;
+import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.domain.VersionPolicy;
+import io.github.awsdocmigration.engine.DestinationKeyResolver;
+import io.github.awsdocmigration.engine.ManifestReader;
+import io.github.awsdocmigration.storage.DestinationWriter;
+import io.github.awsdocmigration.storage.S3DestinationWriter;
 import io.github.awsdocmigration.util.Checksums;
+
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
-import java.io.*; import java.nio.file.*; import java.util.*;
 
-/** Minimal reference CLI: manifest-driven transfer from filesystem or S3 to S3. */
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.HashMap;
+import java.util.Map;
+
 public final class MigrationCli {
+
+    private MigrationCli() {
+    }
+
     public static void main(String[] args) throws Exception {
-        Map<String,String> a=parse(args);
-        String sourceType=req(a,"source-type"); String bucket=req(a,"destination-bucket");
-        String region=a.getOrDefault("region", System.getenv().getOrDefault("AWS_REGION","us-east-1"));
-        VersionPolicy policy=VersionPolicy.valueOf(a.getOrDefault("version-policy","ALL_VERSIONS"));
-        Path manifest=Path.of(req(a,"manifest"));
-        try(S3Client s3=S3Client.builder().region(Region.of(region)).build()) {
-            DocumentSource source=switch(sourceType) {
-                case "filesystem" -> new FilesystemSource(Path.of(req(a,"source-root")));
-                case "s3" -> new S3Source(s3,req(a,"source-bucket"),a.getOrDefault("source-prefix",""));
-                default -> throw new IllegalArgumentException("Unsupported source-type: "+sourceType);
-            };
-            source.validateConnection(); DestinationWriter writer=new S3DestinationWriter(s3,bucket); DestinationKeyResolver keys=new DestinationKeyResolver();
-            long ok=0,failed=0;
-            for(DocumentRecord record:new ManifestReader(manifest)) {
-                try(InputStream input=source.openStream(record)) {
-                    // Hash into a temporary file so content can be streamed again to the synchronous S3 SDK writer.
-                    Path temp=Files.createTempFile("migration-", ".bin");
-                    try { Files.copy(input,temp,StandardCopyOption.REPLACE_EXISTING); String digest; try(InputStream verify=Files.newInputStream(temp)){ digest=Checksums.sha256(verify); }
-                        if(record.expectedSha256()!=null && !record.expectedSha256().equalsIgnoreCase(digest)) throw new IOException("SHA-256 mismatch for "+record.idempotencyKey());
-                        try(InputStream upload=Files.newInputStream(temp)){ writer.write(record,keys.resolve(record,policy),upload,digest); }
-                    } finally { Files.deleteIfExists(temp); }
-                    ok++;
-                } catch(Exception e) { failed++; System.err.println("FAILED "+record.idempotencyKey()+": "+e.getMessage()); }
+
+        Map<String, String> arguments = parse(args);
+
+        String sourceType = required(arguments, "source-type");
+        String destinationBucket =
+                required(arguments, "destination-bucket");
+
+        String region = arguments.getOrDefault(
+                "region",
+                System.getenv().getOrDefault(
+                        "AWS_REGION",
+                        "us-east-1"
+                )
+        );
+
+        VersionPolicy policy = VersionPolicy.valueOf(
+                arguments.getOrDefault(
+                        "version-policy",
+                        "ALL_VERSIONS"
+                )
+        );
+
+        Path manifestPath = Path.of(
+                required(arguments, "manifest")
+        );
+
+        long succeeded = 0;
+        long failed = 0;
+
+        try (S3Client s3 = S3Client.builder()
+                .region(Region.of(region))
+                .build()) {
+
+            DocumentSource source = createSource(
+                    sourceType,
+                    arguments,
+                    s3
+            );
+
+            try (
+                    source;
+                    ManifestReader manifestReader =
+                            new ManifestReader(manifestPath)
+            ) {
+
+                source.validateConnection();
+
+                DestinationWriter writer =
+                        new S3DestinationWriter(
+                                s3,
+                                destinationBucket
+                        );
+
+                DestinationKeyResolver keyResolver =
+                        new DestinationKeyResolver();
+
+                for (DocumentRecord record : manifestReader) {
+
+                    try {
+                        migrateDocument(
+                                source,
+                                writer,
+                                keyResolver,
+                                record,
+                                policy
+                        );
+
+                        succeeded++;
+
+                    } catch (Exception e) {
+
+                        failed++;
+
+                        System.err.println(
+                                "FAILED "
+                                        + record.idempotencyKey()
+                                        + ": "
+                                        + e.getMessage()
+                        );
+                    }
+                }
+
             }
-            source.close(); System.out.printf("Migration run finished. succeeded=%d failed=%d%n",ok,failed); if(failed>0) System.exit(2);
+        }
+
+        System.out.printf(
+                "Migration run finished. succeeded=%d failed=%d%n",
+                succeeded,
+                failed
+        );
+
+        if (failed > 0) {
+            throw new IllegalStateException(
+                    "Migration completed with "
+                            + failed
+                            + " failed document(s)"
+            );
         }
     }
-    private static Map<String,String> parse(String[] args){ Map<String,String> m=new HashMap<>(); for(int i=0;i<args.length;i++){ if(!args[i].startsWith("--") || i+1>=args.length) throw new IllegalArgumentException("Expected --name value arguments"); m.put(args[i].substring(2),args[++i]); } return m; }
-    private static String req(Map<String,String> m,String k){ String v=m.get(k); if(v==null||v.isBlank()) throw new IllegalArgumentException("Missing --"+k); return v; }
+
+    private static DocumentSource createSource(
+            String sourceType,
+            Map<String, String> arguments,
+            S3Client s3
+    ) {
+
+        return switch (sourceType) {
+
+            case "filesystem" -> new FilesystemSource(
+                    Path.of(
+                            required(arguments, "source-root")
+                    )
+            );
+
+            case "s3" -> new S3Source(
+                    s3,
+                    required(arguments, "source-bucket"),
+                    arguments.getOrDefault(
+                            "source-prefix",
+                            ""
+                    )
+            );
+
+            default -> throw new IllegalArgumentException(
+                    "Unsupported source-type: " + sourceType
+            );
+        };
+    }
+
+    private static void migrateDocument(
+            DocumentSource source,
+            DestinationWriter writer,
+            DestinationKeyResolver keyResolver,
+            DocumentRecord record,
+            VersionPolicy policy
+    ) throws Exception {
+
+        Path temporaryFile = null;
+
+        try (InputStream input = source.openStream(record)) {
+
+            temporaryFile = Files.createTempFile(
+                    "migration-",
+                    ".bin"
+            );
+
+            Files.copy(
+                    input,
+                    temporaryFile,
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+
+            String digest;
+
+            try (InputStream verificationStream =
+                         Files.newInputStream(temporaryFile)) {
+
+                digest = Checksums.sha256(verificationStream);
+            }
+
+            String expectedChecksum =
+                    record.expectedSha256();
+
+            if (expectedChecksum != null
+                    && !expectedChecksum.equalsIgnoreCase(digest)) {
+
+                throw new IllegalStateException(
+                        "SHA-256 mismatch for "
+                                + record.idempotencyKey()
+                );
+            }
+
+            String destinationKey = keyResolver.resolve(
+                    record,
+                    policy
+            );
+
+            try (InputStream uploadStream =
+                         Files.newInputStream(temporaryFile)) {
+
+                writer.write(
+                        record,
+                        destinationKey,
+                        uploadStream,
+                        digest
+                );
+            }
+
+        } finally {
+
+            if (temporaryFile != null) {
+                Files.deleteIfExists(temporaryFile);
+            }
+        }
+    }
+
+    private static Map<String, String> parse(String[] args) {
+
+        Map<String, String> arguments = new HashMap<>();
+
+        for (int i = 0; i < args.length; i++) {
+
+            if (!args[i].startsWith("--")
+                    || i + 1 >= args.length
+                    || args[i + 1].startsWith("--")) {
+
+                throw new IllegalArgumentException(
+                        "Expected --name value arguments"
+                );
+            }
+
+            String key = args[i].substring(2);
+
+            if (arguments.containsKey(key)) {
+                throw new IllegalArgumentException(
+                        "Duplicate argument: --" + key
+                );
+            }
+
+            arguments.put(key, args[++i]);
+        }
+
+        return arguments;
+    }
+
+    private static String required(
+            Map<String, String> arguments,
+            String key
+    ) {
+
+        String value = arguments.get(key);
+
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Missing --" + key
+            );
+        }
+
+        return value;
+    }
 }
