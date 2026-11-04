@@ -7,6 +7,8 @@ import io.github.awsdocmigration.domain.DocumentRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.http.AbortableInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
@@ -16,10 +18,11 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.ByteArrayInputStream;
 import java.util.Iterator;
-import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
 class S3SourceTest {
@@ -69,7 +72,10 @@ class S3SourceTest {
 
         DocumentRecord second = records.next();
 
-        assertEquals("documents/report.pdf", second.relativePath());
+        assertEquals(
+                "documents/report.pdf",
+                second.relativePath()
+        );
 
         assertFalse(records.hasNext());
 
@@ -226,7 +232,8 @@ class S3SourceTest {
                 () -> source.openStream(record)
         );
 
-        verify(s3, never()).getObject(any(GetObjectRequest.class));
+        verify(s3, never())
+                .getObject((GetObjectRequest) any(GetObjectRequest.class));
     }
 
     @Test
@@ -240,7 +247,7 @@ class S3SourceTest {
                 100,
                 null,
                 true,
-                java.util.Map.of("sourceBucket", "different-bucket")
+                Map.of("sourceBucket", "different-bucket")
         );
 
         assertThrows(
@@ -248,7 +255,8 @@ class S3SourceTest {
                 () -> source.openStream(record)
         );
 
-        verify(s3, never()).getObject(any(GetObjectRequest.class));
+        verify(s3, never())
+                .getObject((GetObjectRequest) any(GetObjectRequest.class));
     }
 
     @Test
@@ -256,10 +264,17 @@ class S3SourceTest {
 
         byte[] content = "sample document".getBytes();
 
-        when(s3.getObject(any(GetObjectRequest.class)))
-                .thenReturn(
-                        new ByteArrayInputStream(content)
+        ResponseInputStream<GetObjectResponse> responseStream =
+                new ResponseInputStream<>(
+                        GetObjectResponse.builder().build(),
+                        AbortableInputStream.create(
+                                new ByteArrayInputStream(content)
+                        )
                 );
+
+        when(s3.getObject(
+                (GetObjectRequest) any(GetObjectRequest.class)
+        )).thenReturn(responseStream);
 
         DocumentRecord record = new DocumentRecord(
                 "documents/file.pdf",
@@ -269,15 +284,18 @@ class S3SourceTest {
                 content.length,
                 null,
                 true,
-                java.util.Map.of("sourceBucket", "source-bucket")
+                Map.of("sourceBucket", "source-bucket")
         );
 
         try (var input = source.openStream(record)) {
-            assertArrayEquals(content, input.readAllBytes());
+            assertArrayEquals(
+                    content,
+                    input.readAllBytes()
+            );
         }
 
         verify(s3).getObject(
-                argThat(request ->
+                argThat((GetObjectRequest request) ->
                         request.bucket().equals("source-bucket")
                                 && request.key().equals("documents/file.pdf")
                 )
