@@ -27,6 +27,45 @@ public final class JobPreparationCoordinator {
     }
 
     /**
+     * Creates or resumes a job only when its immutable manifest fingerprint
+     * matches the exact manifest artifact supplied by the caller.
+     *
+     * The fingerprint is bound before shard preparation starts. A job that
+     * was previously prepared with a different manifest is rejected.
+     */
+    public MigrationJobState prepare(
+            String jobId,
+            int totalShards,
+            Instant now,
+            String manifestFingerprint
+    ) {
+        requireText(jobId, "jobId");
+        Objects.requireNonNull(now, "Preparation time is required");
+
+        if (manifestFingerprint == null
+                || !manifestFingerprint.matches("[A-Fa-f0-9]{64}")) {
+            throw new IllegalArgumentException(
+                    "manifestFingerprint must contain exactly 64 hexadecimal characters"
+            );
+        }
+
+        stateStore.createJob(jobId, totalShards, now);
+
+        if (!stateStore.bindManifestFingerprint(
+                jobId,
+                manifestFingerprint
+        )) {
+            throw new IllegalStateException(
+                    "Manifest fingerprint does not match the existing job, "
+                            + "or the job no longer accepts an initial fingerprint: "
+                            + jobId
+            );
+        }
+
+        return prepare(jobId, totalShards, now);
+    }
+
+    /**
      * Creates or resumes a job and registers shard numbers 0 through
      * totalShards - 1. The job becomes READY only after every shard exists.
      *
