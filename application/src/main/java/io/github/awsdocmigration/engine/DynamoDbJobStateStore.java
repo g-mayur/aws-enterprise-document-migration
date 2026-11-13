@@ -90,7 +90,6 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 MigrationJobStatus.valueOf(text(item, "status")),
                 integer(item, "totalShards"),
                 nullableText(item, "lastError"),
-                integer(item, "attemptCount"),
                 number(item, "createdAt"),
                 number(item, "updatedAt"),
                 nullableText(item, "manifestFingerprint")
@@ -633,6 +632,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 MigrationShardStatus.valueOf(text(item, "status")),
                 nullableText(item, "workerId"),
                 nullableText(item, "lastError"),
+                integer(item, "attemptCount"),
                 number(item, "createdAt"),
                 number(item, "updatedAt")
         );
