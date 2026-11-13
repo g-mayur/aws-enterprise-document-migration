@@ -86,7 +86,6 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         );
 
         Map<String, AttributeValue> values = new HashMap<>();
-        values.put(":pending", string(DocumentMigrationStatus.PENDING.name()));
         values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
         values.put(":completed", string(DocumentMigrationStatus.COMPLETED.name()));
         values.put(":worker", string(workerId));
@@ -117,7 +116,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                                 + "AND (attribute_not_exists(#attemptCount) "
                                 + "OR #attemptCount < :maxAttempts)"
                 )
-                .expressionAttributeNames(attributeNames())
+                .expressionAttributeNames(claimAttributeNames())
                 .expressionAttributeValues(values)
                 .returnValues(ReturnValue.NONE)
                 .build();
@@ -169,7 +168,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                         "#status = :inProgress AND #leaseOwner = :worker "
                                 + "AND #leaseExpiresAt > :now"
                 )
-                .expressionAttributeNames(attributeNames())
+                .expressionAttributeNames(completionAttributeNames())
                 .expressionAttributeValues(values)
                 .returnValues(ReturnValue.NONE)
                 .build();
@@ -218,7 +217,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                         "#status = :inProgress AND #leaseOwner = :worker "
                                 + "AND #leaseExpiresAt > :now"
                 )
-                .expressionAttributeNames(attributeNames())
+                .expressionAttributeNames(failureAttributeNames())
                 .expressionAttributeValues(values)
                 .returnValues(ReturnValue.NONE)
                 .build();
@@ -284,7 +283,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         return key;
     }
 
-    private static Map<String, String> attributeNames() {
+    private static Map<String, String> claimAttributeNames() {
         Map<String, String> names = new HashMap<>();
         names.put("#status", "status");
         names.put("#leaseOwner", "leaseOwner");
@@ -293,9 +292,28 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         names.put("#updatedAt", "updatedAt");
         names.put("#documentId", "documentId");
         names.put("#versionId", "versionId");
+        return names;
+    }
+
+    private static Map<String, String> completionAttributeNames() {
+        Map<String, String> names = new HashMap<>();
+        names.put("#status", "status");
         names.put("#destinationKey", "destinationKey");
         names.put("#checksum", "checksum");
+        names.put("#updatedAt", "updatedAt");
+        names.put("#leaseOwner", "leaseOwner");
+        names.put("#leaseExpiresAt", "leaseExpiresAt");
         names.put("#lastError", "lastError");
+        return names;
+    }
+
+    private static Map<String, String> failureAttributeNames() {
+        Map<String, String> names = new HashMap<>();
+        names.put("#status", "status");
+        names.put("#lastError", "lastError");
+        names.put("#updatedAt", "updatedAt");
+        names.put("#leaseOwner", "leaseOwner");
+        names.put("#leaseExpiresAt", "leaseExpiresAt");
         return names;
     }
 
