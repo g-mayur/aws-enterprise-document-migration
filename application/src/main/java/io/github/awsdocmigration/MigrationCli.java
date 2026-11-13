@@ -4,11 +4,18 @@ import io.github.awsdocmigration.connector.DocumentSource;
 import io.github.awsdocmigration.connector.filesystem.FilesystemSource;
 import io.github.awsdocmigration.connector.s3.S3Source;
 import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.domain.MigrationJobStatus;
 import io.github.awsdocmigration.domain.VersionPolicy;
 import io.github.awsdocmigration.engine.DestinationKeyResolver;
 import io.github.awsdocmigration.engine.DocumentMigrationCoordinator;
 import io.github.awsdocmigration.engine.DocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
+import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
+import io.github.awsdocmigration.engine.JobPreparationCoordinator;
+import io.github.awsdocmigration.engine.JobStateStore;
+import io.github.awsdocmigration.engine.ManifestFingerprint;
+import io.github.awsdocmigration.engine.MigrationJobState;
+import io.github.awsdocmigration.engine.ShardExecutionCoordinator;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -25,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -40,7 +48,6 @@ public final class MigrationCli {
         Map<String, String> arguments = parse(args);
 
         String mode = arguments.getOrDefault("mode", "migrate");
-        String sourceType = required(arguments, "source-type");
 
         String region = arguments.getOrDefault(
                 "region",
@@ -56,21 +63,17 @@ public final class MigrationCli {
                         .build()
         ) {
 
-            DocumentSource source = createSource(
-                    sourceType,
-                    arguments,
-                    s3
-            );
-
             switch (mode) {
 
                 case "generate-manifest" -> generateManifest(
-                        source,
+                        createSource(required(arguments, "source-type"), arguments, s3),
                         Path.of(required(arguments, "manifest-output"))
                 );
 
+                case "prepare-job" -> prepareJob(dynamoDb, arguments);
+
                 case "migrate" -> migrate(
-                        source,
+                        createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
                         dynamoDb,
                         arguments
@@ -78,7 +81,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, migrate"
                 );
             }
         }
@@ -161,6 +164,18 @@ public final class MigrationCli {
             DynamoDbClient dynamoDb,
             Map<String, String> arguments
     ) throws Exception {
+
+        validateShardedExecutionArguments(arguments);
+
+        if (hasText(arguments.get("job-state-table"))) {
+            migrateSharded(
+                    source,
+                    s3,
+                    dynamoDb,
+                    arguments
+            );
+            return;
+        }
 
         String destinationBucket = required(arguments, "destination-bucket");
 
@@ -304,6 +319,255 @@ public final class MigrationCli {
                             + " failed document(s)"
             );
         }
+    }
+
+    /**
+     * Prepares the durable job and registers its complete shard plan.
+     * Run this once before launching the independent shard workers.
+     */
+    private static void prepareJob(
+            DynamoDbClient dynamoDb,
+            Map<String, String> arguments
+    ) throws Exception {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        Path manifestPath = Path.of(required(arguments, "manifest"));
+        int totalShards = parsePositiveInt(
+                required(arguments, "total-shards"),
+                "total-shards"
+        );
+
+        String fingerprint = ManifestFingerprint.calculate(manifestPath);
+        JobStateStore jobStateStore =
+                new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+
+        MigrationJobState prepared = new JobPreparationCoordinator(jobStateStore)
+                .prepare(jobId, totalShards, Instant.now(), fingerprint);
+
+        System.out.printf(
+                "Migration job prepared. job=%s status=%s totalShards=%d manifestSha256=%s%n",
+                jobId,
+                prepared.status(),
+                prepared.totalShards(),
+                fingerprint
+        );
+    }
+
+    /**
+     * Workers verify the immutable prepared manifest and complete shard plan
+     * instead of racing to prepare the same job concurrently.
+     */
+    private static void verifyPreparedJob(
+            JobStateStore jobStateStore,
+            String jobId,
+            int totalShards,
+            String manifestFingerprint
+    ) {
+        MigrationJobState job = jobStateStore.getJob(jobId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Migration job has not been prepared: " + jobId
+                ));
+
+        if (job.status() != MigrationJobStatus.READY
+                && job.status() != MigrationJobStatus.RUNNING) {
+            throw new IllegalStateException(
+                    "Migration job must be READY or RUNNING before workers start; current status="
+                            + job.status()
+            );
+        }
+
+        if (job.totalShards() != totalShards) {
+            throw new IllegalStateException(
+                    "Prepared job has " + job.totalShards()
+                            + " shards, but worker requested " + totalShards
+            );
+        }
+
+        if (job.manifestFingerprint() == null
+                || !manifestFingerprint.equalsIgnoreCase(job.manifestFingerprint())) {
+            throw new IllegalStateException(
+                    "Manifest fingerprint does not match the prepared job"
+            );
+        }
+
+        Map<Integer, Boolean> registered = new HashMap<>();
+        jobStateStore.listShards(jobId).forEach(
+                shard -> registered.put(shard.shardNumber(), Boolean.TRUE)
+        );
+
+        if (registered.size() != totalShards) {
+            throw new IllegalStateException(
+                    "Prepared job has " + registered.size()
+                            + " registered shards; expected " + totalShards
+            );
+        }
+
+        for (int shardNumber = 0; shardNumber < totalShards; shardNumber++) {
+            if (!registered.containsKey(shardNumber)) {
+                throw new IllegalStateException(
+                        "Prepared job is missing shard " + shardNumber
+                );
+            }
+        }
+    }
+
+    /**
+     * Executes one shard of a prepared, fingerprint-bound migration job.
+     *
+     * The job/shard lifecycle table and document lease table are separate,
+     * matching the Terraform reference architecture.
+     */
+    private static void migrateSharded(
+            DocumentSource source,
+            S3Client s3,
+            DynamoDbClient dynamoDb,
+            Map<String, String> arguments
+    ) throws Exception {
+
+        String destinationBucket = required(arguments, "destination-bucket");
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        String documentStateTable = required(arguments, "state-table");
+        Path manifestPath = Path.of(required(arguments, "manifest"));
+
+        int totalShards = parsePositiveInt(
+                required(arguments, "total-shards"),
+                "total-shards"
+        );
+        int shardNumber = parseNonNegativeInt(
+                required(arguments, "shard-number"),
+                "shard-number"
+        );
+        if (shardNumber >= totalShards) {
+            throw new IllegalArgumentException(
+                    "--shard-number must be less than --total-shards"
+            );
+        }
+
+        int leaseSeconds = parsePositiveInt(
+                arguments.getOrDefault("lease-seconds", "300"),
+                "lease-seconds"
+        );
+        if (leaseSeconds < 3) {
+            throw new IllegalArgumentException(
+                    "--lease-seconds must be at least 3 for shard lease renewal"
+            );
+        }
+
+        int maximumAttempts = parsePositiveInt(
+                arguments.getOrDefault("max-attempts", "5"),
+                "max-attempts"
+        );
+        String workerId = arguments.getOrDefault(
+                "worker-id",
+                "worker-" + UUID.randomUUID()
+        );
+        if (workerId.isBlank()) {
+            throw new IllegalArgumentException("--worker-id cannot be blank");
+        }
+
+        VersionPolicy policy = VersionPolicy.valueOf(
+                arguments.getOrDefault("version-policy", "ALL_VERSIONS")
+        );
+
+        try (source) {
+            source.validateConnection();
+
+            String fingerprint = ManifestFingerprint.calculate(manifestPath);
+
+            JobStateStore jobStateStore =
+                    new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+            DocumentStateStore documentStateStore =
+                    new DynamoDbDocumentStateStore(dynamoDb, documentStateTable);
+
+            verifyPreparedJob(
+                    jobStateStore,
+                    jobId,
+                    totalShards,
+                    fingerprint
+            );
+
+            DestinationWriter writer =
+                    new S3DestinationWriter(s3, destinationBucket);
+            DestinationKeyResolver keyResolver =
+                    new DestinationKeyResolver();
+
+            ShardExecutionCoordinator execution =
+                    new ShardExecutionCoordinator(
+                            jobStateStore,
+                            documentStateStore,
+                            jobId,
+                            shardNumber,
+                            workerId,
+                            Duration.ofSeconds(leaseSeconds),
+                            Duration.ofSeconds(leaseSeconds),
+                            maximumAttempts
+                    );
+
+            ShardExecutionCoordinator.Result result = execution.execute(
+                    manifestPath,
+                    record -> migrateDocument(
+                            source,
+                            writer,
+                            keyResolver,
+                            record,
+                            policy
+                    )
+            );
+
+            System.out.printf(
+                    "Shard execution completed. job=%s shard=%d assigned=%d "
+                            + "migrated=%d alreadyCompleted=%d worker=%s%n",
+                    jobId,
+                    result.shardNumber(),
+                    result.assigned(),
+                    result.migrated(),
+                    result.alreadyCompleted(),
+                    workerId
+            );
+        }
+    }
+
+    /**
+     * Validates the opt-in sharded CLI configuration without changing the
+     * existing stateless and document-state-only command forms.
+     */
+    static void validateShardedExecutionArguments(
+            Map<String, String> arguments
+    ) {
+        boolean sharded = hasText(arguments.get("job-state-table"));
+
+        if (!sharded) {
+            if (arguments.containsKey("total-shards")) {
+                throw new IllegalArgumentException(
+                        "--total-shards requires --job-state-table"
+                );
+            }
+            return;
+        }
+
+        required(arguments, "state-table");
+        required(arguments, "job-id");
+        required(arguments, "total-shards");
+        required(arguments, "shard-number");
+
+        int totalShards = parsePositiveInt(
+                arguments.get("total-shards"),
+                "total-shards"
+        );
+        int shardNumber = parseNonNegativeInt(
+                arguments.get("shard-number"),
+                "shard-number"
+        );
+        if (shardNumber >= totalShards) {
+            throw new IllegalArgumentException(
+                    "--shard-number must be less than --total-shards"
+            );
+        }
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**

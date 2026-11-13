@@ -221,4 +221,63 @@ class MigrationCliTest {
                 () -> MigrationCli.generateManifest(null, manifest)
         );
     }
+
+    @Test
+    void acceptsCompleteShardedExecutionConfiguration() {
+        Map<String, String> arguments = Map.of(
+                "job-state-table", "migration-jobs",
+                "state-table", "migration-documents",
+                "job-id", "job-2026-001",
+                "total-shards", "8",
+                "shard-number", "3"
+        );
+
+        assertDoesNotThrow(
+                () -> MigrationCli.validateShardedExecutionArguments(arguments)
+        );
+    }
+
+    @Test
+    void rejectsShardedExecutionWithoutDocumentStateTable() {
+        Map<String, String> arguments = Map.of(
+                "job-state-table", "migration-jobs",
+                "job-id", "job-2026-001",
+                "total-shards", "8",
+                "shard-number", "3"
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateShardedExecutionArguments(arguments)
+        );
+    }
+
+    @Test
+    void rejectsShardNumberOutsideConfiguredRange() {
+        Map<String, String> arguments = Map.of(
+                "job-state-table", "migration-jobs",
+                "state-table", "migration-documents",
+                "job-id", "job-2026-001",
+                "total-shards", "8",
+                "shard-number", "8"
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateShardedExecutionArguments(arguments)
+        );
+    }
+
+    @Test
+    void rejectsTotalShardsWithoutJobStateTable() {
+        Map<String, String> arguments = Map.of(
+                "total-shards", "8"
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateShardedExecutionArguments(arguments)
+        );
+    }
+
 }
