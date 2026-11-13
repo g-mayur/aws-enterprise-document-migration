@@ -38,6 +38,7 @@ class DynamoDbRecoveryWaveStoreTest {
         assertEquals(1, lease.generation());
         assertEquals(List.of(2, 4, 7), lease.selectedShardNumbers());
         assertEquals(64, lease.selectedShardDigest().length());
+        assertTrue(lease.executionName().matches("recovery-[0-9a-f]{32}"));
 
         ArgumentCaptor<UpdateItemRequest> request = ArgumentCaptor.forClass(UpdateItemRequest.class);
         verify(dynamoDb).updateItem(request.capture());
