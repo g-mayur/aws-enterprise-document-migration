@@ -1,0 +1,51 @@
+name: Deployment Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "application/**"
+      - "infrastructure/**"
+      - ".github/workflows/deployment-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "application/**"
+      - "infrastructure/**"
+      - ".github/workflows/deployment-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infrastructure fmt -check -recursive
+
+      - name: Initialize providers without backend
+        run: terraform -chdir=infrastructure init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infrastructure validate -no-color
+
+  container:
+    name: Build worker container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build worker image
+        run: docker build --pull --file application/Dockerfile --tag document-migration-worker:ci application
