@@ -2,6 +2,7 @@ package io.github.awsdocmigration.engine;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import io.github.awsdocmigration.domain.VersionIdentityType;
 import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
@@ -340,4 +341,97 @@ class DynamoDbDocumentStateStoreTest {
 
         verifyNoInteractions(dynamoDb);
     }
+
+
+    @Test
+    void keepsSourceVersionsAndSnapshotsInSeparateStateItems() {
+        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                .thenReturn(UpdateItemResponse.builder().build());
+
+        assertTrue(store.claim(
+                "job-typed", 0, "same-document", "same-version",
+                VersionIdentityType.SOURCE_VERSION, "worker-a", now,
+                Duration.ofMinutes(5), 3
+        ));
+        assertTrue(store.claim(
+                "job-typed", 0, "same-document", "same-version",
+                VersionIdentityType.SNAPSHOT, "worker-b", now,
+                Duration.ofMinutes(5), 3
+        ));
+
+        ArgumentCaptor<UpdateItemRequest> captor =
+                ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDb, times(2)).updateItem(captor.capture());
+
+        UpdateItemRequest sourceVersionRequest = captor.getAllValues().get(0);
+        UpdateItemRequest snapshotRequest = captor.getAllValues().get(1);
+
+        assertNotEquals(
+                sourceVersionRequest.key().get("sk").s(),
+                snapshotRequest.key().get("sk").s()
+        );
+        assertEquals(
+                VersionIdentityType.SOURCE_VERSION.name(),
+                sourceVersionRequest.expressionAttributeValues()
+                        .get(":versionIdentityType").s()
+        );
+        assertEquals(
+                VersionIdentityType.SNAPSHOT.name(),
+                snapshotRequest.expressionAttributeValues()
+                        .get(":versionIdentityType").s()
+        );
+        assertTrue(sourceVersionRequest.updateExpression()
+                .contains("#versionIdentityType = :versionIdentityType"));
+    }
+
+    @Test
+    void typedLookupReturnsPersistedVersionIdentityType() {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("documentId", AttributeValue.builder().s("document-typed").build());
+        item.put("versionId", AttributeValue.builder().s("snapshot-1").build());
+        item.put("status", AttributeValue.builder().s("IN_PROGRESS").build());
+        item.put("attemptCount", AttributeValue.builder().n("1").build());
+        item.put("updatedAt", AttributeValue.builder().n("1794564000000").build());
+        item.put("versionIdentityType",
+                AttributeValue.builder().s("SNAPSHOT").build());
+
+        when(dynamoDb.getItem(any(GetItemRequest.class)))
+                .thenReturn(GetItemResponse.builder().item(item).build());
+
+        Optional<DocumentMigrationState> result = store.get(
+                "job-typed", 1, "document-typed", "snapshot-1",
+                VersionIdentityType.SNAPSHOT
+        );
+
+        assertTrue(result.isPresent());
+        assertEquals(VersionIdentityType.SNAPSHOT,
+                result.orElseThrow().versionIdentityType());
+
+        ArgumentCaptor<GetItemRequest> captor =
+                ArgumentCaptor.forClass(GetItemRequest.class);
+        verify(dynamoDb).getItem(captor.capture());
+        assertTrue(captor.getValue().key().get("sk").s().startsWith("DOC#"));
+    }
+
+    @Test
+    void legacyLookupStillReadsItemsWithoutIdentityType() {
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("documentId", AttributeValue.builder().s("document-legacy").build());
+        item.put("versionId", AttributeValue.builder().s("version-legacy").build());
+        item.put("status", AttributeValue.builder().s("COMPLETED").build());
+        item.put("attemptCount", AttributeValue.builder().n("1").build());
+        item.put("updatedAt", AttributeValue.builder().n("1794564000000").build());
+
+        when(dynamoDb.getItem(any(GetItemRequest.class)))
+                .thenReturn(GetItemResponse.builder().item(item).build());
+
+        Optional<DocumentMigrationState> result = store.get(
+                "job-legacy", 0, "document-legacy", "version-legacy"
+        );
+
+        assertTrue(result.isPresent());
+        assertEquals(VersionIdentityType.LEGACY_UNSPECIFIED,
+                result.orElseThrow().versionIdentityType());
+    }
+
 }
