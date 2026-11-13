@@ -127,7 +127,7 @@ class JobPreparationCoordinatorTest {
             long timestamp = now.toEpochMilli();
             jobs.put(jobId, new MigrationJobState(
                     jobId, MigrationJobStatus.CREATED, totalShards,
-                    null, timestamp, timestamp
+                    null, timestamp, timestamp, null
             ));
             return true;
         }
@@ -135,6 +135,29 @@ class JobPreparationCoordinatorTest {
         @Override
         public Optional<MigrationJobState> getJob(String jobId) {
             return Optional.ofNullable(jobs.get(jobId));
+        }
+
+        @Override
+        public boolean bindManifestFingerprint(String jobId, String fingerprint) {
+            MigrationJobState current = jobs.get(jobId);
+            if (current == null) {
+                return false;
+            }
+            String canonical = fingerprint.toLowerCase(java.util.Locale.ROOT);
+            if (current.manifestFingerprint() != null
+                    && !current.manifestFingerprint().equals(canonical)) {
+                return false;
+            }
+            jobs.put(jobId, new MigrationJobState(
+                    current.jobId(),
+                    current.status(),
+                    current.totalShards(),
+                    current.lastError(),
+                    current.createdAtEpochMillis(),
+                    current.updatedAtEpochMillis(),
+                    canonical
+            ));
+            return true;
         }
 
         @Override
@@ -156,7 +179,8 @@ class JobPreparationCoordinatorTest {
             }
             jobs.put(jobId, new MigrationJobState(
                     jobId, target, current.totalShards(), errorMessage,
-                    current.createdAtEpochMillis(), now.toEpochMilli()
+                    current.createdAtEpochMillis(), now.toEpochMilli(),
+                    current.manifestFingerprint()
             ));
             return true;
         }
