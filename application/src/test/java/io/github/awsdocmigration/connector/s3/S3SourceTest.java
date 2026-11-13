@@ -711,4 +711,37 @@ class S3SourceTest {
                 )
         );
     }
+
+    @Test
+    void rejectsLegacyUnspecifiedIdentity() {
+
+        DocumentRecord legacyRecord = new DocumentRecord(
+                "documents/file.pdf",
+                "s3-current",
+                "file.pdf",
+                "documents/file.pdf",
+                100,
+                null,
+                true,
+                Map.of("sourceBucket", BUCKET)
+        );
+
+        assertEquals(
+                VersionIdentityType.LEGACY_UNSPECIFIED,
+                legacyRecord.versionIdentityType()
+        );
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> source.openStream(legacyRecord)
+        );
+
+        assertTrue(
+                exception.getMessage().contains("LEGACY_UNSPECIFIED")
+        );
+
+        verify(s3, never()).getObject(
+                (GetObjectRequest) any(GetObjectRequest.class)
+        );
+    }
 }

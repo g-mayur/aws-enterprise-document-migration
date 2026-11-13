@@ -12,6 +12,11 @@
     "sizeBytes": {"type": "integer", "minimum": 0},
     "expectedSha256": {"type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{64}$"},
     "isLatest": {"type": "boolean"},
+    "versionIdentityType": {
+      "type": "string",
+      "enum": ["SOURCE_VERSION", "SNAPSHOT", "LEGACY_UNSPECIFIED"],
+      "description": "Optional for compatibility with older manifests. New S3 manifests should use SOURCE_VERSION or SNAPSHOT."
+    },
     "metadata": {"type": "object", "additionalProperties": {"type": "string"}}
   },
   "additionalProperties": false

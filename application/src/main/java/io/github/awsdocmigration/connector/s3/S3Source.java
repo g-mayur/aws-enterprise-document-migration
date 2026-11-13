@@ -597,16 +597,15 @@ public final class S3Source implements DocumentSource {
         }
 
         /*
-         * Backward compatibility for older manifests.
-         *
-         * Legacy records do not contain sufficient information to
-         * identify an immutable source version or snapshot.
+         * Older manifests do not identify an immutable source version
+         * or an observed snapshot. Fetching the current object here could
+         * silently migrate content different from the manifest's source
+         * state, so ambiguous S3 records are rejected.
          */
-        return s3.getObject(
-                GetObjectRequest.builder()
-                        .bucket(bucket)
-                        .key(key)
-                        .build()
+        throw new IllegalArgumentException(
+                "S3 record has LEGACY_UNSPECIFIED version identity; "
+                        + "regenerate the manifest with explicit source-version "
+                        + "or snapshot identity before migration"
         );
     }
 

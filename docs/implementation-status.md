@@ -1,18 +1,25 @@
 # Implementation status
 
+This document describes the current starter implementation. A successful build does not establish production readiness.
+
 | Capability | Status | Notes |
 |---|---|---|
-| Connector SPI | Starter | Java interface available |
-| Filesystem source | Starter | Single logical version per file |
-| S3 source | Starter | Current objects only; not S3 historical versions |
-| JSONL manifest reader | Starter | Incremental line reader |
-| Version key resolution | Starter | Explicit latest flag required |
-| SHA-256 | Starter | Streams from file/input stream |
-| S3 destination writer | Starter | SSE-S3; synchronous single PUT |
-| Multipart/resume | Not implemented | Required for large objects |
-| DynamoDB worker state/leases | Not implemented | Terraform tables are foundation only |
-| Distributed orchestration | Not implemented | Add ECS service, EventBridge/Lambda/SQS if design requires |
+| Connector SPI | Implemented (starter) | Java interface and capability declarations available |
+| Filesystem source | Implemented (starter) | Discovers files as single logical versions |
+| S3 source discovery | Implemented (starter) | Supports current-object snapshots in unversioned buckets and version enumeration in enabled/suspended buckets |
+| S3 source retrieval | Implemented (starter) | Exact retrieval for source versions; conditional ETag and state validation for snapshots |
+| Legacy S3 identity handling | Safe rejection | S3 records with LEGACY_UNSPECIFIED identity are rejected rather than silently fetching the current object |
+| JSONL manifest reader/writer | Implemented (starter) | Incremental UTF-8 JSON Lines processing |
+| Manifest schema | Updated | Optional versionIdentityType preserves compatibility with older v1 records |
+| Automatic manifest generation | Implemented (starter) | Discovery records can be written incrementally using ManifestWriter |
+| Version key resolution | Implemented (starter) | Explicit latest flag required for LATEST_ONLY |
+| SHA-256 | Implemented (starter) | Streams from file/input stream |
+| Downloaded-size verification | Implemented (starter) | CLI checks source bytes against manifest size |
+| S3 destination writer | Implemented (starter) | SSE-S3; synchronous single PUT |
+| Multipart/resumable upload | Not implemented | Required for objects above the single-PUT limit and resilient large transfers |
+| Durable DynamoDB worker state/leases | Not implemented | Terraform tables are foundation only; application integration is pending |
+| Distributed orchestration | Not implemented | ECS worker deployment and job orchestration are pending |
 | Private API and notifications | Not implemented | Optional control-plane extensions |
-| Production monitoring/alarms | Not implemented | Define SLOs and dashboards |
+| Production monitoring/alarms | Not implemented | Define SLOs, metrics and dashboards |
 
 Do not describe this release as production-ready until all relevant production-readiness gates pass.
