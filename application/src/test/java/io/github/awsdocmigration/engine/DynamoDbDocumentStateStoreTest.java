@@ -97,6 +97,91 @@ class DynamoDbDocumentStateStoreTest {
     }
 
     @Test
+    void renewsLeaseForCurrentOwnerBeforeExpiry() {
+        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                .thenReturn(UpdateItemResponse.builder().build());
+
+        assertTrue(store.renewLease(
+                "job-1",
+                2,
+                "document-1",
+                "version-1",
+                "worker-a",
+                now,
+                Duration.ofMinutes(10)
+        ));
+
+        ArgumentCaptor<UpdateItemRequest> captor =
+                ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDb).updateItem(captor.capture());
+
+        UpdateItemRequest request = captor.getValue();
+        assertTrue(request.conditionExpression().contains("#status = :inProgress"));
+        assertTrue(request.conditionExpression().contains("#leaseOwner = :worker"));
+        assertTrue(request.conditionExpression().contains("#leaseExpiresAt > :now"));
+        assertEquals(
+                now.plus(Duration.ofMinutes(10)).toEpochMilli(),
+                Long.parseLong(request.expressionAttributeValues().get(":leaseExpiry").n())
+        );
+        assertEquals(
+                now.toEpochMilli(),
+                Long.parseLong(request.expressionAttributeValues().get(":now").n())
+        );
+        assertEquals("worker-a", request.expressionAttributeValues().get(":worker").s());
+    }
+
+    @Test
+    void refusesLeaseRenewalWhenLeaseIsExpiredOrOwnedByAnotherWorker() {
+        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                .thenThrow(ConditionalCheckFailedException.builder()
+                        .message("Lease is expired or no longer owned")
+                        .build());
+
+        assertFalse(store.renewLease(
+                "job-1",
+                0,
+                "document-1",
+                "version-1",
+                "old-worker",
+                now,
+                Duration.ofMinutes(5)
+        ));
+    }
+
+    @Test
+    void rejectsInvalidLeaseRenewalDurationBeforeCallingAws() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> store.renewLease(
+                        "job-1", 0, "document-1", "version-1",
+                        "worker-a", now, Duration.ZERO
+                )
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> store.renewLease(
+                        "job-1", 0, "document-1", "version-1",
+                        "worker-a", now, Duration.ofNanos(1)
+                )
+        );
+
+        verifyNoInteractions(dynamoDb);
+    }
+
+    @Test
+    void rejectsLeaseRenewalWhenExpiryWouldOverflow() {
+        assertThrows(
+                ArithmeticException.class,
+                () -> store.renewLease(
+                        "job-1", 0, "document-1", "version-1",
+                        "worker-a", Instant.MAX, Duration.ofMinutes(1)
+                )
+        );
+
+        verifyNoInteractions(dynamoDb);
+    }
+
+    @Test
     void marksDocumentCompletedOnlyForCurrentLeaseOwner() {
 
         when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
