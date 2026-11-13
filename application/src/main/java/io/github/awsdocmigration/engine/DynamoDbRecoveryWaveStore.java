@@ -136,6 +136,61 @@ public final class DynamoDbRecoveryWaveStore {
     }
 
     /**
+     * Binds the exact Step Functions request to the current wave before any
+     * network call is made. Repeated calls are accepted only when both values
+     * match, preventing a retry from reusing an execution name with changed
+     * state-machine input.
+     */
+    public boolean bindExecutionRequest(
+            RecoveryWaveLease lease,
+            String stateMachineArn,
+            String inputDigest,
+            Instant now
+    ) {
+        Objects.requireNonNull(lease, "Recovery wave lease is required");
+        Objects.requireNonNull(now, "Binding time is required");
+        requireText(stateMachineArn, "stateMachineArn");
+        requireText(inputDigest, "inputDigest");
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(lease.jobId()))
+                    .updateExpression("SET #stateMachineArn = :stateMachineArn, "
+                            + "#executionInputDigest = :inputDigest, #updatedAt = :updatedAt")
+                    .conditionExpression(
+                            "#state = :active AND #generation = :generation "
+                                    + "AND #ownerToken = :ownerToken AND #waveId = :waveId "
+                                    + "AND (attribute_not_exists(#stateMachineArn) OR "
+                                    + "(#stateMachineArn = :stateMachineArn "
+                                    + "AND #executionInputDigest = :inputDigest))"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#state", "state",
+                            "#generation", "generation",
+                            "#ownerToken", "ownerToken",
+                            "#waveId", "waveId",
+                            "#stateMachineArn", "stateMachineArn",
+                            "#executionInputDigest", "executionInputDigest",
+                            "#updatedAt", "updatedAt"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":active", s("ACTIVE"),
+                            ":generation", n(lease.generation()),
+                            ":ownerToken", s(lease.ownerToken()),
+                            ":waveId", s(lease.waveId()),
+                            ":stateMachineArn", s(stateMachineArn),
+                            ":inputDigest", s(inputDigest),
+                            ":updatedAt", n(now.toEpochMilli())
+                    ))
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException staleOwnerOrChangedRequest) {
+            return false;
+        }
+    }
+
+    /**
      * Records the observed Step Functions execution status for the current
      * wave owner. UNKNOWN and RUNNING retain the lock. Terminal values release
      * it for a future generation. Only call with a terminal value after a
