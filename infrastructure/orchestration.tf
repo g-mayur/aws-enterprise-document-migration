@@ -145,6 +145,26 @@ data "aws_iam_policy_document" "orchestrator" {
   }
 
   statement {
+    sid = "DistributedMapChildExecutions"
+    actions = [
+      "states:StartExecution",
+      "states:DescribeExecution",
+      "states:StopExecution"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "EcsTaskEventIntegration"
+    actions = [
+      "events:PutTargets",
+      "events:PutRule",
+      "events:DescribeRule"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "PassWorkerRoles"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.worker_execution.arn, aws_iam_role.worker_task.arn]
