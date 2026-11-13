@@ -117,6 +117,7 @@ class ShardExecutionCoordinatorTest {
 
         assertNotNull(shardZeroRecord);
         assertNotNull(otherShardRecord);
+        DocumentRecord selectedRecord = shardZeroRecord;
 
         when(documentStore.claim(
                 anyString(), anyInt(), anyString(), anyString(),
@@ -136,7 +137,7 @@ class ShardExecutionCoordinatorTest {
                 ignored -> {
                     migrationCalls.incrementAndGet();
                     return new DocumentMigrationCoordinator.MigrationOutcome(
-                            "destination/" + shardZeroRecord.fileName(), SHA256
+                            "destination/" + selectedRecord.fileName(), SHA256
                     );
                 }
         );
