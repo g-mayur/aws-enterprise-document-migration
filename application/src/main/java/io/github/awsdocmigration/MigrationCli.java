@@ -26,6 +26,8 @@ import io.github.awsdocmigration.util.Checksums;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.core.sync.ResponseTransformer;
 
 import java.io.InputStream;
 import java.io.IOException;
@@ -185,7 +187,7 @@ public final class MigrationCli {
                 arguments.getOrDefault("version-policy", "ALL_VERSIONS")
         );
 
-        Path manifestPath = Path.of(required(arguments, "manifest"));
+        Path manifestPath = resolveManifestPath(s3, arguments);
 
         DocumentMigrationCoordinator coordinator = null;
         String stateTable = arguments.get("state-table");
@@ -539,6 +541,46 @@ public final class MigrationCli {
                     result.alreadyCompleted(),
                     workerId
             );
+        }
+    }
+
+    /** Downloads an immutable S3 manifest for an ephemeral ECS worker. */
+    static Path resolveManifestPath(S3Client s3, Map<String, String> arguments)
+            throws IOException {
+        String manifestUri = arguments.get("manifest-s3-uri");
+        if (manifestUri == null || manifestUri.isBlank()) {
+            return Path.of(required(arguments, "manifest"));
+        }
+        if (arguments.containsKey("manifest")) {
+            throw new IllegalArgumentException(
+                    "Specify either --manifest or --manifest-s3-uri, not both"
+            );
+        }
+        if (!manifestUri.startsWith("s3://")) {
+            throw new IllegalArgumentException(
+                    "--manifest-s3-uri must use the s3://bucket/key format"
+            );
+        }
+        String location = manifestUri.substring("s3://".length());
+        int separator = location.indexOf('/');
+        if (separator < 1 || separator == location.length() - 1) {
+            throw new IllegalArgumentException(
+                    "--manifest-s3-uri must include both bucket and object key"
+            );
+        }
+        String bucket = location.substring(0, separator);
+        String key = location.substring(separator + 1);
+        Path downloaded = Files.createTempFile("migration-manifest-", ".jsonl");
+        try {
+            s3.getObject(
+                    GetObjectRequest.builder().bucket(bucket).key(key).build(),
+                    ResponseTransformer.toFile(downloaded)
+            );
+            downloaded.toFile().deleteOnExit();
+            return downloaded;
+        } catch (RuntimeException failure) {
+            Files.deleteIfExists(downloaded);
+            throw failure;
         }
     }
 
