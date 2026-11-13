@@ -23,12 +23,16 @@ A newly acquired wave is stored as `ACTIVE` with execution status `UNKNOWN`. Thi
 
 Stale owners are fenced out by generation, owner token, and wave ID. An old coordinator cannot update a later generation.
 
-## Deliberate limitations in this milestone
+## Dispatcher integration
 
-- No Step Functions `StartExecution` or `DescribeExecution` calls are made.
+The reusable Step Functions dispatcher is documented in [step-functions-recovery-dispatch.md](step-functions-recovery-dispatch.md). It binds the exact state-machine ARN and input digest to the active wave, starts with the deterministic execution name, and resolves ambiguous outcomes using execution listing plus `DescribeExecution`. Unknown outcomes remain locked.
+
+## Remaining limitations
+
+- The dispatcher is not yet wired into an operator CLI or automated recovery trigger.
 - No automatic stale-wave takeover or timeout-based lock expiry is implemented.
-- No ECS dispatch or worker retry behavior is changed.
+- No ECS dispatch or worker retry behavior is changed outside the existing migration state machine.
 - No attempt count is reset or increased by the coordinator.
 - No AWS infrastructure is deployed or modified.
 
-The next milestone can integrate deterministic Step Functions execution identity and status resolution on top of these persistence primitives.
+Operational use still requires a supported entry point, full validation against the prepared job and manifest, least-privilege IAM, and a non-production AWS pilot.
