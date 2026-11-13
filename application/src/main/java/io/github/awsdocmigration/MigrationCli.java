@@ -17,6 +17,7 @@ import io.github.awsdocmigration.engine.JobStateStore;
 import io.github.awsdocmigration.engine.ManifestFingerprint;
 import io.github.awsdocmigration.engine.MigrationJobState;
 import io.github.awsdocmigration.engine.ShardExecutionCoordinator;
+import io.github.awsdocmigration.engine.ShardRecoveryInspector;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -76,6 +77,8 @@ public final class MigrationCli {
 
                 case "prepare-job" -> prepareJob(dynamoDb, arguments);
 
+                case "inspect-job" -> inspectJob(dynamoDb, arguments);
+
                 case "migrate" -> migrate(
                         createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
@@ -85,7 +88,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, migrate"
                 );
             }
         }
@@ -355,6 +358,61 @@ public final class MigrationCli {
                 prepared.totalShards(),
                 fingerprint
         );
+    }
+
+    /**
+     * Prints a read-only recovery assessment for every persisted shard.
+     * No leases are claimed and no DynamoDB records are changed.
+     */
+    private static void inspectJob(
+            DynamoDbClient dynamoDb,
+            Map<String, String> arguments
+    ) {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        JobStateStore store = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+        MigrationJobState job = store.getJob(jobId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Migration job was not found: " + jobId
+                ));
+
+        Instant inspectedAt = Instant.now();
+        System.out.printf(
+                "Read-only shard inspection. job=%s jobStatus=%s inspectedAt=%s "
+                        + "registeredShards=%d expectedShards=%d%n",
+                jobId, job.status(), inspectedAt, store.listShards(jobId).size(),
+                job.totalShards()
+        );
+        System.out.println("shard,status,attempts,worker,leaseExpiry,assessment,lastError");
+
+        store.listShards(jobId).stream()
+                .sorted(java.util.Comparator.comparingInt(
+                        io.github.awsdocmigration.engine.MigrationShardState::shardNumber
+                ))
+                .forEach(shard -> {
+                    ShardRecoveryInspector.Disposition assessment =
+                            ShardRecoveryInspector.assess(shard, inspectedAt);
+                    String expiry = shard.leaseExpiresAtEpochMillis() == null
+                            ? "unknown"
+                            : Instant.ofEpochMilli(shard.leaseExpiresAtEpochMillis()).toString();
+                    System.out.printf("%d,%s,%d,%s,%s,%s,%s%n",
+                            shard.shardNumber(),
+                            shard.status(),
+                            shard.attemptCount(),
+                            csv(shard.workerId()),
+                            expiry,
+                            assessment,
+                            csv(shard.lastError()));
+                });
+
+        System.out.println("Inspection only: no shard was claimed or modified.");
+    }
+
+    private static String csv(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     /**
