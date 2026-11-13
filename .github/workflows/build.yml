@@ -1,4 +1,3 @@
-
 name: Java Build and Validation
 
 on:
@@ -14,6 +13,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    services:
+      dynamodb-local:
+        image: amazon/dynamodb-local:2.5.2
+        ports:
+          - 8000:8000
+
+    env:
+      DYNAMODB_LOCAL_ENDPOINT: http://localhost:8000
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,6 +34,6 @@ jobs:
           cache: maven
           cache-dependency-path: application/pom.xml
 
-      - name: Build and run tests
+      - name: Build and run unit and integration tests
         working-directory: application
         run: mvn --batch-mode clean verify
