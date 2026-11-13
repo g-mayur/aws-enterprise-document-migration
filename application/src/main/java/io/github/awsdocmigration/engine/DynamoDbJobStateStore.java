@@ -637,7 +637,8 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 nullableText(item, "lastError"),
                 integer(item, "attemptCount"),
                 number(item, "createdAt"),
-                number(item, "updatedAt")
+                number(item, "updatedAt"),
+                nullableNumber(item, "leaseExpiresAt")
         );
     }
 
@@ -668,6 +669,11 @@ public final class DynamoDbJobStateStore implements JobStateStore {
 
     private static String nullableText(Map<String, AttributeValue> item, String name) {
         return text(item, name);
+    }
+
+    private static Long nullableNumber(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        return value == null || value.n() == null ? null : Long.valueOf(value.n());
     }
 
     private static int integer(Map<String, AttributeValue> item, String name) {
