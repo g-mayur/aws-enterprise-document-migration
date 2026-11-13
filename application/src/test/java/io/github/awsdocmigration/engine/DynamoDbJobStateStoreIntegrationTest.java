@@ -83,9 +83,11 @@ class DynamoDbJobStateStoreIntegrationTest {
 
         assertTrue(store.transitionJob("job-1", MigrationJobStatus.CREATED,
                 MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
-        assertFalse(store.transitionJob("job-1", MigrationJobStatus.CREATED,
+        assertFalse(store.transitionJob("job-1", MigrationJobStatus.DISCOVERING,
                 MigrationJobStatus.READY, NOW.plusSeconds(2), null));
 
+        assertTrue(store.createShard("job-1", 0, NOW.plusSeconds(2)));
+        assertTrue(store.createShard("job-1", 1, NOW.plusSeconds(2)));
         assertTrue(store.transitionJob("job-1", MigrationJobStatus.DISCOVERING,
                 MigrationJobStatus.READY, NOW.plusSeconds(3), null));
 
