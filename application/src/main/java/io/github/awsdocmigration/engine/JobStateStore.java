@@ -13,7 +13,10 @@ import java.util.Optional;
  * Implementations must use conditional writes so concurrent callers cannot
  * silently overwrite a state transition made by another worker.
  */
-public interface JobStateStore {\n\n    int MAX_SHARD_ATTEMPTS = 3;
+public interface JobStateStore {
+
+    int MAX_SHARD_ATTEMPTS = 3;
+\n    int MAX_SHARD_ATTEMPTS = 3;
 
     boolean createJob(String jobId, int totalShards, Instant now);
 
