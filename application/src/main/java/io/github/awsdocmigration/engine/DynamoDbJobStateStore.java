@@ -4,7 +4,6 @@ import io.github.awsdocmigration.domain.MigrationJobStatus;
 import io.github.awsdocmigration.domain.MigrationShardStatus;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.ConditionCheck;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
@@ -136,13 +135,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     .key(key(jobId, "JOB"))
                     .updateExpression(update)
                     .conditionExpression(condition)
-                    .expressionAttributeNames(Map.of(
-                            "#status", "status",
-                            "#updatedAt", "updatedAt",
-                            "#lastError", "lastError",
-                            "#shardCount", "shardCount",
-                            "#totalShards", "totalShards"
-                    ))
+                    .expressionAttributeNames(jobTransitionNames(target, errorMessage))
                     .expressionAttributeValues(values)
                     .build());
             return true;
@@ -309,18 +302,45 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     .key(key(jobId, shardKey(shardNumber)))
                     .updateExpression(update)
                     .conditionExpression(condition)
-                    .expressionAttributeNames(Map.of(
-                            "#status", "status",
-                            "#updatedAt", "updatedAt",
-                            "#workerId", "workerId",
-                            "#lastError", "lastError"
-                    ))
+                    .expressionAttributeNames(shardTransitionNames(expected, target, errorMessage))
                     .expressionAttributeValues(values)
                     .build());
             return true;
         } catch (ConditionalCheckFailedException staleState) {
             return false;
         }
+    }
+
+    private static Map<String, String> jobTransitionNames(
+            MigrationJobStatus target,
+            String errorMessage
+    ) {
+        Map<String, String> names = new HashMap<>();
+        names.put("#status", "status");
+        names.put("#updatedAt", "updatedAt");
+        if (target == MigrationJobStatus.READY) {
+            names.put("#shardCount", "shardCount");
+            names.put("#totalShards", "totalShards");
+        }
+        if (target != MigrationJobStatus.FAILED || hasText(errorMessage)) {
+            names.put("#lastError", "lastError");
+        }
+        return names;
+    }
+
+    private static Map<String, String> shardTransitionNames(
+            MigrationShardStatus expected,
+            MigrationShardStatus target,
+            String errorMessage
+    ) {
+        Map<String, String> names = new HashMap<>();
+        names.put("#status", "status");
+        names.put("#updatedAt", "updatedAt");
+        names.put("#workerId", "workerId");
+        if (target != MigrationShardStatus.FAILED || hasText(errorMessage)) {
+            names.put("#lastError", "lastError");
+        }
+        return names;
     }
 
     private static MigrationShardState toShardState(Map<String, AttributeValue> item) {
