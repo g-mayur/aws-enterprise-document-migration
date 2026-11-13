@@ -61,7 +61,7 @@ Requirements: Java 17+, Maven 3.9+, AWS CLI v2, an AWS account and an S3 destina
      --region us-east-1
    ```
 
-   The starter CLI wiring is intentionally minimal; see [docs/quickstart.md](docs/quickstart.md) and [docs/implementation-status.md](docs/implementation-status.md) for supported behavior and extension points.
+   For durable sharded execution, configure the separate document-state and job-state DynamoDB tables and use the `--job-state-table`, `--job-id`, `--total-shards` and `--shard-number` options described in [docs/quickstart.md](docs/quickstart.md). See [docs/implementation-status.md](docs/implementation-status.md) for current limitations.
 
 ## Configure for your environment
 
