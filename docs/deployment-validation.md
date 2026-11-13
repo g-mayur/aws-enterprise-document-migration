@@ -22,7 +22,7 @@ Follow the bootstrap README. Review and apply that stack separately. Record its 
 
 From the repository root, use the target account, Region and an immutable commit-derived tag:
 
-    export AWS_REGION=us-east-1
+    export AWS_REGION=$(terraform -chdir=infrastructure/bootstrap output -raw aws_region)
     export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
     export ECR_URI=$(terraform -chdir=infrastructure/bootstrap output -raw ecr_repository_url)
     export IMAGE_TAG=sha-$(git rev-parse --short HEAD)
@@ -40,7 +40,14 @@ From the repository root:
     cd infrastructure
     cp terraform.tfvars.example terraform.tfvars
 
-Edit terraform.tfvars with approved values. Set the immutable worker_image, worker_subnet_ids and worker_security_group_ids from bootstrap outputs, source_bucket_arn, and globally unique staging/destination bucket names. Do not commit terraform.tfvars, credentials, or state files.
+For a bootstrap-managed environment, retrieve the integration values from the bootstrap state:
+
+    terraform -chdir=bootstrap output -raw aws_region
+    terraform -chdir=bootstrap output -json worker_subnet_ids
+    terraform -chdir=bootstrap output -json worker_security_group_ids
+    terraform -chdir=bootstrap output -raw ecr_repository_url
+
+Edit terraform.tfvars with approved values. Set aws_region to the same Region reported by bootstrap, worker_image to the full immutable ECR image URI (including its tag), and copy the two JSON list outputs directly into worker_subnet_ids and worker_security_group_ids. Also set source_bucket_arn and globally unique staging/destination bucket names. The bootstrap outputs are already shaped as lists matching the workload variables; do not wrap the returned JSON lists in another list. Do not commit terraform.tfvars, credentials, or state files.
 
 Then run:
 

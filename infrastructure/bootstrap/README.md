@@ -43,9 +43,9 @@ Keep this stack's state separate from the workload stack. Use encrypted remote s
 
 Use the immutable repository URL from the bootstrap output. From the repository root:
 
-    export AWS_REGION=us-east-1
-    export ECR_URI=$(terraform -chdir=infrastructure/bootstrap output -raw ecr_repository_url)
+    export AWS_REGION=$(terraform -chdir=infrastructure/bootstrap output -raw aws_region)
     export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    export ECR_URI=$(terraform -chdir=infrastructure/bootstrap output -raw ecr_repository_url)
     export IMAGE_TAG=sha-$(git rev-parse --short HEAD)
 
     aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
@@ -58,16 +58,20 @@ Never reuse an image tag. Record the pushed digest and use the full immutable im
 
 The existing workload stack remains in infrastructure/. Set these values in its terraform.tfvars:
 
+- aws_region: the same Region reported by the bootstrap stack.
 - worker_image: full immutable ECR image URI, including the tag.
-- worker_subnet_ids: JSON list returned by terraform output -json private_subnet_ids.
-- worker_security_group_ids: a one-item list containing worker_security_group_id.
+- worker_subnet_ids: the JSON list returned by the bootstrap output named worker_subnet_ids.
+- worker_security_group_ids: the JSON list returned by the bootstrap output named worker_security_group_ids.
 - source_bucket_arn: approved source bucket ARN.
-- Unique staging and destination bucket names, plus matching Region and project name.
+- Unique staging and destination bucket names, plus matching project name.
 
-Retrieve outputs with:
+The bootstrap exposes both the original scalar/list outputs and workload-ready list outputs. The workload-ready output names and shapes intentionally match the workload variables, so their JSON can be copied without manually wrapping a subnet or security-group ID.
 
-    terraform -chdir=infrastructure/bootstrap output -json private_subnet_ids
-    terraform -chdir=infrastructure/bootstrap output -raw worker_security_group_id
+Retrieve the integration values with:
+
+    terraform -chdir=infrastructure/bootstrap output -raw aws_region
+    terraform -chdir=infrastructure/bootstrap output -json worker_subnet_ids
+    terraform -chdir=infrastructure/bootstrap output -json worker_security_group_ids
     terraform -chdir=infrastructure/bootstrap output -raw ecr_repository_url
 
 Then follow the deployment validation runbook for workload plan, review, apply, small test job, and reconciliation.
