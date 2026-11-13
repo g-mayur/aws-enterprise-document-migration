@@ -72,3 +72,20 @@ An exhausted shard must not be made retryable by editing its DynamoDB item or re
 - No increase to the three-claim budget.
 - No assumption that ECS task launch retries and durable shard attempts are interchangeable.
 - No production-readiness claim based on unit tests alone.
+
+
+## First implementation slice: read-only inspection
+
+The first implementation adds a read-only `inspect-job` CLI mode. It reports each shard's status, durable attempt count, worker, lease expiry, last error, and a conservative recovery assessment.
+
+Example invocation:
+
+```bash
+java -jar document-migration-worker.jar \
+  --mode inspect-job \
+  --job-id JOB_ID \
+  --job-state-table JOB_STATE_TABLE \
+  --region AWS_REGION
+```
+
+The inspection does not claim shards, dispatch ECS tasks, or write to DynamoDB. A running shard with missing lease-expiry metadata is classified as unknown and is never recommended for immediate replacement. This command is an operator visibility tool, not an automatic recovery mechanism.
