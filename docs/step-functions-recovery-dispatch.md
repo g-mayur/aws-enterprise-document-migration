@@ -2,7 +2,7 @@
 
 ## Scope
 
-The application now contains a fail-closed dispatcher that connects a previously acquired `RecoveryWaveLease` to a Standard Step Functions execution. It uses the deterministic execution name already stored in the wave and persists the exact state-machine ARN and SHA-256 digest of the exact JSON input before making the network call.
+The application now contains a fail-closed dispatcher that connects a previously acquired `RecoveryWaveLease` to a Standard Step Functions execution. The wave store derives a Step Functions-safe execution name from the job and unique wave identity, then persists it with the lease. The dispatcher also persists the exact state-machine ARN and SHA-256 digest of the exact JSON input before making the network call.
 
 This is a reusable application component. It is not yet wired into an operator CLI, an automated scheduler, or the existing migration state machine as a recovery entry point. No AWS resources or IAM policies are changed by this milestone.
 
