@@ -228,7 +228,7 @@ resource "aws_sfn_state_machine" "migration" {
                 Overrides = {
                   ContainerOverrides = [{
                     Name = "migration-worker"
-                    "Command.$" = "States.Array('--mode','migrate','--source-type','s3','--source-bucket',$.sourceBucket,'--source-prefix',$.sourcePrefix,'--destination-bucket',$.destinationBucket,'--manifest-s3-uri',$.manifestS3Uri,'--state-table','${aws_dynamodb_table.state.name}','--job-state-table','${aws_dynamodb_table.job_state.name}','--job-id',$.jobId,'--total-shards',States.Format('{}',$.totalShards),'--shard-number',States.Format('{}',$.shardNumber))"
+                    "Command.$" = "States.ArrayConcat(States.Array('--mode','migrate','--source-type','s3','--source-bucket',$.sourceBucket,'--source-prefix',$.sourcePrefix,'--destination-bucket'),States.Array($.destinationBucket,'--manifest-s3-uri',$.manifestS3Uri,'--state-table','${aws_dynamodb_table.state.name}','--job-state-table','${aws_dynamodb_table.job_state.name}','--job-id',$.jobId,'--total-shards',States.Format('{}',$.totalShards)),States.Array('--shard-number',States.Format('{}',$.shardNumber)))"
                   }]
                 }
               }
