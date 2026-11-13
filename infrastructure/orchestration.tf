@@ -48,8 +48,17 @@ data "aws_iam_policy_document" "worker_task" {
   dynamic "statement" {
     for_each = var.source_bucket_arn == null ? [] : [var.source_bucket_arn]
     content {
-      sid       = "ListSourceBucket"
-      actions   = ["s3:ListBucket"]
+      sid       = "InspectAndListSourceBucket"
+      actions   = ["s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketVersioning"]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.source_bucket_arn == null ? [] : ["${var.source_bucket_arn}/*"]
+    content {
+      sid       = "ReadExactSourceVersions"
+      actions   = ["s3:GetObjectVersion"]
       resources = [statement.value]
     }
   }
