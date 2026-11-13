@@ -53,11 +53,12 @@ Requirements: Java 17+, Maven 3.9+, AWS CLI v2, an AWS account and an S3 destina
 
    ```bash
    java -jar target/document-migration-worker.jar \
-     --migration.manifest=../examples/manifests/sample.jsonl \
-     --migration.source.type=filesystem \
-     --migration.source.root=/absolute/path/to/source \
-     --migration.destination.bucket=YOUR_DESTINATION_BUCKET \
-     --migration.version-policy=ALL_VERSIONS
+     --source-type filesystem \
+     --source-root /absolute/path/to/source \
+     --destination-bucket YOUR_DESTINATION_BUCKET \
+     --manifest ../examples/manifests/sample.jsonl \
+     --version-policy ALL_VERSIONS \
+     --region us-east-1
    ```
 
    The starter CLI wiring is intentionally minimal; see [docs/quickstart.md](docs/quickstart.md) and [docs/implementation-status.md](docs/implementation-status.md) for supported behavior and extension points.
