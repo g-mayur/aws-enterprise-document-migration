@@ -82,7 +82,7 @@ The source connector must implement the `DocumentSource` interface. See [docs/co
 
 ## Deploy the AWS foundation
 
-See [infrastructure/README.md](infrastructure/README.md). Terraform creates foundational resources only. Review every plan and IAM policy, provide your own VPC/networking and workload-specific controls, and configure state locking and remote state before shared use.
+See [infrastructure/README.md](infrastructure/README.md). Terraform creates foundational resources only. Review every plan and IAM policy, provide your own VPC/networking and workload-specific controls, and configure state locking and remote state before shared use. The [deployment validation runbook](docs/deployment-validation.md) covers immutable worker-image publication, Terraform deployment, a small Step Functions pilot, and post-run reconciliation. CI validates Terraform and builds the worker image but does not deploy to AWS.
 
 ## Production readiness
 
