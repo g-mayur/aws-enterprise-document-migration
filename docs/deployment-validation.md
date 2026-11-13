@@ -99,7 +99,7 @@ Use the state machine ARN from Terraform output. Supply one shard number for eac
 
 ## 8. Verify and record the pilot
 
-- Confirm the Step Functions execution reaches SUCCEEDED. A worker task failure should fail its Map item and the overall execution; inspect the failed item and ECS task logs. If ECS could not start a task, check whether its DynamoDB shard remains PENDING and resolve it before retrying. Automatic Step Functions retry and automatic repair of launch failures are not implemented.
+- Confirm the Step Functions execution reaches SUCCEEDED. A worker task failure should fail its Map item and the overall execution; inspect the failed item and ECS task logs. Step Functions makes up to two delayed retries only for the documented `AmazonECS.Unknown` RunTask API rejection, which occurs before a worker can claim its shard. If those launch retries are exhausted, check whether the DynamoDB shard remains PENDING and resolve it before retrying. Worker/application failures and expired-lease reconciliation are not automatically retried.
 - Confirm expected ECS tasks started and stopped, and review CloudWatch logs for errors.
 - Reconcile source manifest records, completed/failed shard state, destination object count, object sizes, and SHA-256 checksums.
 - Verify destination encryption and access controls.
