@@ -114,6 +114,81 @@ class JobPreparationCoordinatorTest {
         );
     }
 
+    @Test
+    void preparesJobWithManifestFingerprintAndAllowsMatchingResume() {
+        InMemoryJobStateStore store = new InMemoryJobStateStore();
+        JobPreparationCoordinator coordinator =
+                new JobPreparationCoordinator(store);
+        String fingerprint = "a".repeat(64);
+
+        MigrationJobState first =
+                coordinator.prepare("fingerprinted-job", 2, NOW, fingerprint);
+        MigrationJobState resumed =
+                coordinator.prepare(
+                        "fingerprinted-job", 2, NOW.plusSeconds(10), fingerprint
+                );
+
+        assertEquals(MigrationJobStatus.READY, first.status());
+        assertEquals(fingerprint, first.manifestFingerprint());
+        assertEquals(fingerprint, resumed.manifestFingerprint());
+        assertEquals(first.updatedAtEpochMillis(), resumed.updatedAtEpochMillis());
+    }
+
+    @Test
+    void rejectsResumeWithDifferentManifestFingerprint() {
+        InMemoryJobStateStore store = new InMemoryJobStateStore();
+        JobPreparationCoordinator coordinator =
+                new JobPreparationCoordinator(store);
+
+        coordinator.prepare("fingerprinted-job", 1, NOW, "a".repeat(64));
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.prepare(
+                        "fingerprinted-job", 1, NOW.plusSeconds(1), "b".repeat(64)
+                )
+        );
+
+        assertEquals(
+                "a".repeat(64),
+                store.getJob("fingerprinted-job").orElseThrow().manifestFingerprint()
+        );
+    }
+
+    @Test
+    void rejectsShardCountMismatchBeforeBindingFingerprint() {
+        InMemoryJobStateStore store = new InMemoryJobStateStore();
+        JobPreparationCoordinator coordinator =
+                new JobPreparationCoordinator(store);
+
+        coordinator.prepare("existing-job", 1, NOW);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.prepare(
+                        "existing-job", 2, NOW.plusSeconds(1), "c".repeat(64)
+                )
+        );
+
+        assertNull(
+                store.getJob("existing-job").orElseThrow().manifestFingerprint()
+        );
+    }
+
+    @Test
+    void rejectsInvalidManifestFingerprintBeforeCreatingJob() {
+        InMemoryJobStateStore store = new InMemoryJobStateStore();
+        JobPreparationCoordinator coordinator =
+                new JobPreparationCoordinator(store);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> coordinator.prepare("invalid-fingerprint-job", 1, NOW, "invalid")
+        );
+
+        assertTrue(store.getJob("invalid-fingerprint-job").isEmpty());
+    }
+
     private static final class InMemoryJobStateStore implements JobStateStore {
 
         private final Map<String, MigrationJobState> jobs = new HashMap<>();
