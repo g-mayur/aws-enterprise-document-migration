@@ -276,18 +276,24 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         values.put(":now", n(now.toEpochMilli()));
 
         String update = "SET #status = :target, #updatedAt = :now";
+        List<String> attributesToRemove = new ArrayList<>();
+
         if (target == MigrationShardStatus.RUNNING) {
             values.put(":worker", s(workerId));
             update += ", #workerId = :worker";
         } else if (expected == MigrationShardStatus.RUNNING) {
-            update += " REMOVE #workerId";
+            attributesToRemove.add("#workerId");
         }
 
         if (target == MigrationShardStatus.FAILED && hasText(errorMessage)) {
             values.put(":error", s(safeError(errorMessage)));
             update += ", #lastError = :error";
         } else if (target != MigrationShardStatus.FAILED) {
-            update += " REMOVE #lastError";
+            attributesToRemove.add("#lastError");
+        }
+
+        if (!attributesToRemove.isEmpty()) {
+            update += " REMOVE " + String.join(", ", attributesToRemove);
         }
 
         String condition = "#status = :expected";
