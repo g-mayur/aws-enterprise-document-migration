@@ -432,7 +432,7 @@ public final class MigrationCli {
         String jobId = required(arguments, "job-id");
         String jobStateTable = required(arguments, "job-state-table");
         String documentStateTable = required(arguments, "state-table");
-        Path manifestPath = Path.of(required(arguments, "manifest"));
+        Path manifestPath = resolveManifestPath(s3, arguments);
 
         int totalShards = parsePositiveInt(
                 required(arguments, "total-shards"),
