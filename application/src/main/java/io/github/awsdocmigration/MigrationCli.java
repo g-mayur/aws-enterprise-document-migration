@@ -383,7 +383,8 @@ public final class MigrationCli {
             );
         }
 
-        if (!manifestFingerprint.equalsIgnoreCase(job.manifestFingerprint())) {
+        if (job.manifestFingerprint() == null
+                || !manifestFingerprint.equalsIgnoreCase(job.manifestFingerprint())) {
             throw new IllegalStateException(
                     "Manifest fingerprint does not match the prepared job"
             );
