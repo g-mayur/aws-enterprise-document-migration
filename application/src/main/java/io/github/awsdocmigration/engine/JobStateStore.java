@@ -44,8 +44,11 @@ public interface JobStateStore {
     List<MigrationShardState> listShards(String jobId);
 
     /**
-     * Atomically claims a pending shard or reclaims a running shard whose
-     * lease has expired. A successful claim returns a unique fencing token.
+     * Atomically claims a pending or previously failed shard, or reclaims a
+     * running shard whose lease has expired, while fewer than three total
+     * claims have been made. Each successful claim increments the persisted
+     * attempt count and returns a unique fencing token. An expired lease at
+     * the attempt limit is moved to terminal FAILED state.
      */
     Optional<ShardLease> claimShard(
             String jobId,
