@@ -19,7 +19,9 @@ This document describes the current starter implementation. A successful build d
 | CLI state integration | Not implemented | MigrationCli does not yet use the state repository |
 | Durable retry orchestration | Partial foundation | Attempt limits and lease reclamation are supported by the repository; worker integration is pending |
 | Resumable multipart upload | Not implemented | Upload state and completed parts are not persisted across process restarts |
-| Migration job and shard lifecycle | Implemented (starter) | Separate DynamoDB job-state table; conditional job/shard transitions and shard registration; no worker scheduler yet |
+| Migration job and shard lifecycle | Implemented (starter) | Separate DynamoDB job-state table; conditional job/shard transitions and shard registration |
+| Job preparation | Implemented (starter) | Resumable preparation registers contiguous shards and moves a job to READY only after registration is complete |
+| Deterministic shard assignment | Implemented (starter) | SHA-256 assignment from document/version identity; independent of manifest ordering |
 | Distributed orchestration | Not implemented | ECS worker deployment and job scheduling/dispatch are pending |
 | Production monitoring/alarms | Not implemented | Define SLOs, metrics and dashboards |
 
