@@ -160,10 +160,12 @@ public final class DynamoDbJobStateStore implements JobStateStore {
 
         String update = "SET #status = :target, #updatedAt = :now";
         if ((target == MigrationJobStatus.FAILED
-                || target == MigrationJobStatus.COMPLETED_WITH_ERRORS)\n                && hasText(errorMessage)) {
+                || target == MigrationJobStatus.COMPLETED_WITH_ERRORS)
+                && hasText(errorMessage)) {
             values.put(":error", s(safeError(errorMessage)));
             update += ", #lastError = :error";
-        } else if (target != MigrationJobStatus.FAILED\n                && target != MigrationJobStatus.COMPLETED_WITH_ERRORS) {
+        } else if (target != MigrationJobStatus.FAILED
+                && target != MigrationJobStatus.COMPLETED_WITH_ERRORS) {
             update += " REMOVE #lastError";
         }
 
