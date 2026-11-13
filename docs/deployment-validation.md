@@ -39,7 +39,7 @@ After the bootstrap stack is applied and the immutable worker image is published
 
     export AWS_REGION=$(terraform -chdir=infrastructure/bootstrap output -raw aws_region)
     export WORKER_IMAGE="$ECR_URI:$IMAGE_TAG"
-    scripts/deployment-preflight.sh
+    bash scripts/deployment-preflight.sh
 
 The script makes read-only AWS API calls and does not apply Terraform, publish images, create resources, or start a migration. It requires the local bootstrap Terraform state and initialized Terraform providers for both roots. Stop if the account, Region, image digest, or network checks do not match the approved deployment target.
 
