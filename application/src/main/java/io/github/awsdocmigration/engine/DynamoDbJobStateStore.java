@@ -108,14 +108,18 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     .updateExpression("SET #manifestFingerprint = :fingerprint")
                     .conditionExpression(
                             "attribute_exists(pk) AND "
-                                    + "(attribute_not_exists(#manifestFingerprint) "
-                                    + "OR #manifestFingerprint = :fingerprint)"
+                                    + "(#manifestFingerprint = :fingerprint OR "
+                                    + "(attribute_not_exists(#manifestFingerprint) AND "
+                                    + "(#status = :created OR #status = :discovering)))"
                     )
                     .expressionAttributeNames(Map.of(
-                            "#manifestFingerprint", "manifestFingerprint"
+                            "#manifestFingerprint", "manifestFingerprint",
+                            "#status", "status"
                     ))
                     .expressionAttributeValues(Map.of(
-                            ":fingerprint", s(canonicalFingerprint)
+                            ":fingerprint", s(canonicalFingerprint),
+                            ":created", s(MigrationJobStatus.CREATED.name()),
+                            ":discovering", s(MigrationJobStatus.DISCOVERING.name())
                     ))
                     .build());
             return true;
