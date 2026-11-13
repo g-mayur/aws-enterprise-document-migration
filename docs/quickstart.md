@@ -8,7 +8,7 @@
 
 Example filesystem source: `java -jar target/document-migration-worker.jar --source-type filesystem --source-root /data/export --destination-bucket my-destination --manifest ../examples/manifests/sample.jsonl --version-policy ALL_VERSIONS --region us-east-1`
 
-**Important:** The sample manifest's `relativePath` must match the source-relative file path. The current CLI uses a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object multipart streaming is a required production enhancement.
+**Important:** The sample manifest's `relativePath` must match the source-relative file path. The current CLI uses a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object uploads use sequential multipart streaming above 64 MiB; the current implementation spools one part at a time to temporary disk. Multipart resume across worker/process restarts is not implemented.
 
 ## Run a durable sharded migration
 
