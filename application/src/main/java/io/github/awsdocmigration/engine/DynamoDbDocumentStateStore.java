@@ -1,6 +1,7 @@
 package io.github.awsdocmigration.engine;
 
 import io.github.awsdocmigration.domain.DocumentMigrationStatus;
+import io.github.awsdocmigration.domain.VersionIdentityType;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
@@ -25,7 +26,9 @@ import java.util.Optional;
  * DynamoDB implementation of the document state contract.
  *
  * The existing state table uses pk/sk string keys. Each job/shard is a
- * partition and each document version is a deterministically hashed item.
+ * partition and each document identity is a deterministically hashed item.
+ * Legacy identities retain the original hash input so existing state remains
+ * addressable after this upgrade.
  */
 public final class DynamoDbDocumentStateStore implements DocumentStateStore {
 
@@ -34,10 +37,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
     private final DynamoDbClient dynamoDb;
     private final String tableName;
 
-    public DynamoDbDocumentStateStore(
-            DynamoDbClient dynamoDb,
-            String tableName
-    ) {
+    public DynamoDbDocumentStateStore(DynamoDbClient dynamoDb, String tableName) {
         this.dynamoDb = Objects.requireNonNull(
                 dynamoDb,
                 "DynamoDB client is required"
@@ -58,12 +58,13 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             int shardNumber,
             String documentId,
             String versionId,
+            VersionIdentityType versionIdentityType,
             String workerId,
             Instant now,
             Duration leaseDuration,
             int maximumAttempts
     ) {
-        validateIdentity(jobId, shardNumber, documentId, versionId);
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
         requireText(workerId, "workerId");
         Objects.requireNonNull(now, "Current time is required");
         Objects.requireNonNull(leaseDuration, "Lease duration is required");
@@ -80,10 +81,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         }
 
         long nowMillis = now.toEpochMilli();
-        long leaseExpiry = Math.addExact(
-                nowMillis,
-                leaseDuration.toMillis()
-        );
+        long leaseExpiry = Math.addExact(nowMillis, leaseDuration.toMillis());
 
         Map<String, AttributeValue> values = new HashMap<>();
         values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
@@ -96,10 +94,11 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         values.put(":maxAttempts", number(maximumAttempts));
         values.put(":documentId", string(documentId));
         values.put(":versionId", string(versionId));
+        values.put(":versionIdentityType", string(versionIdentityType.name()));
 
         UpdateItemRequest request = UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(key(jobId, shardNumber, documentId, versionId))
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
                 .updateExpression(
                         "SET #status = :inProgress, "
                                 + "#leaseOwner = :worker, "
@@ -107,7 +106,8 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                                 + "#attemptCount = if_not_exists(#attemptCount, :zero) + :one, "
                                 + "#updatedAt = :now, "
                                 + "#documentId = :documentId, "
-                                + "#versionId = :versionId"
+                                + "#versionId = :versionId, "
+                                + "#versionIdentityType = :versionIdentityType"
                 )
                 .conditionExpression(
                         "(attribute_not_exists(#status) OR "
@@ -135,11 +135,12 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             int shardNumber,
             String documentId,
             String versionId,
+            VersionIdentityType versionIdentityType,
             String workerId,
             Instant now,
             Duration leaseDuration
     ) {
-        validateIdentity(jobId, shardNumber, documentId, versionId);
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
         requireText(workerId, "workerId");
         Objects.requireNonNull(now, "Current time is required");
         Objects.requireNonNull(leaseDuration, "Lease duration is required");
@@ -162,7 +163,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
 
         UpdateItemRequest request = UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(key(jobId, shardNumber, documentId, versionId))
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
                 .updateExpression(
                         "SET #leaseExpiresAt = :leaseExpiry, #updatedAt = :now"
                 )
@@ -184,12 +185,13 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             int shardNumber,
             String documentId,
             String versionId,
+            VersionIdentityType versionIdentityType,
             String workerId,
             String destinationKey,
             String sha256,
             Instant now
     ) {
-        validateIdentity(jobId, shardNumber, documentId, versionId);
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
         requireText(workerId, "workerId");
         requireText(destinationKey, "destinationKey");
         requireSha256(sha256);
@@ -205,7 +207,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
 
         UpdateItemRequest request = UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(key(jobId, shardNumber, documentId, versionId))
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
                 .updateExpression(
                         "SET #status = :completed, "
                                 + "#destinationKey = :destinationKey, "
@@ -231,20 +233,18 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             int shardNumber,
             String documentId,
             String versionId,
+            VersionIdentityType versionIdentityType,
             String workerId,
             String errorMessage,
             Instant now
     ) {
-        validateIdentity(jobId, shardNumber, documentId, versionId);
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
         requireText(workerId, "workerId");
         Objects.requireNonNull(now, "Current time is required");
 
         String safeError = errorMessage == null || errorMessage.isBlank()
                 ? "Unspecified migration failure"
-                : errorMessage.substring(
-                        0,
-                        Math.min(errorMessage.length(), MAX_ERROR_LENGTH)
-                );
+                : errorMessage.substring(0, Math.min(errorMessage.length(), MAX_ERROR_LENGTH));
 
         Map<String, AttributeValue> values = new HashMap<>();
         values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
@@ -255,7 +255,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
 
         UpdateItemRequest request = UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(key(jobId, shardNumber, documentId, versionId))
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
                 .updateExpression(
                         "SET #status = :failed, "
                                 + "#lastError = :error, "
@@ -279,14 +279,15 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             String jobId,
             int shardNumber,
             String documentId,
-            String versionId
+            String versionId,
+            VersionIdentityType versionIdentityType
     ) {
-        validateIdentity(jobId, shardNumber, documentId, versionId);
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
 
         GetItemResponse response = dynamoDb.getItem(
                 GetItemRequest.builder()
                         .tableName(tableName)
-                        .key(key(jobId, shardNumber, documentId, versionId))
+                        .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
                         .consistentRead(true)
                         .build()
         );
@@ -296,6 +297,11 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         }
 
         Map<String, AttributeValue> item = response.item();
+        AttributeValue storedIdentityType = item.get("versionIdentityType");
+        VersionIdentityType identityType = storedIdentityType == null
+                || storedIdentityType.s() == null
+                ? VersionIdentityType.LEGACY_UNSPECIFIED
+                : VersionIdentityType.valueOf(storedIdentityType.s());
 
         return Optional.of(new DocumentMigrationState(
                 text(item, "documentId"),
@@ -307,7 +313,8 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                 nullableText(item, "destinationKey"),
                 nullableText(item, "checksum"),
                 nullableText(item, "lastError"),
-                longValue(item, "updatedAt")
+                longValue(item, "updatedAt"),
+                identityType
         ));
     }
 
@@ -324,11 +331,12 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
             String jobId,
             int shardNumber,
             String documentId,
-            String versionId
+            String versionId,
+            VersionIdentityType versionIdentityType
     ) {
         Map<String, AttributeValue> key = new HashMap<>();
         key.put("pk", string("JOB#" + jobId + "#SHARD#" + shardNumber));
-        key.put("sk", string("DOC#" + identityHash(documentId, versionId)));
+        key.put("sk", string("DOC#" + identityHash(documentId, versionId, versionIdentityType)));
         return key;
     }
 
@@ -341,6 +349,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         names.put("#updatedAt", "updatedAt");
         names.put("#documentId", "documentId");
         names.put("#versionId", "versionId");
+        names.put("#versionIdentityType", "versionIdentityType");
         return names;
     }
 
@@ -375,11 +384,21 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         return names;
     }
 
-    private static String identityHash(String documentId, String versionId) {
+    /**
+     * Preserve the original hash for legacy records so their existing state
+     * remains addressable. New identity types use a namespaced hash input.
+     */
+    private static String identityHash(
+            String documentId,
+            String versionId,
+            VersionIdentityType versionIdentityType
+    ) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] input = (documentId + "\u0000" + versionId)
-                    .getBytes(StandardCharsets.UTF_8);
+            String identity = versionIdentityType == VersionIdentityType.LEGACY_UNSPECIFIED
+                    ? documentId + "\u0000" + versionId
+                    : versionIdentityType.name() + "\u0000" + documentId + "\u0000" + versionId;
+            byte[] input = identity.getBytes(StandardCharsets.UTF_8);
             return HexFormat.of().formatHex(digest.digest(input));
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
@@ -394,62 +413,43 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         return AttributeValue.builder().n(Long.toString(value)).build();
     }
 
-    private static String text(
-            Map<String, AttributeValue> item,
-            String name
-    ) {
+    private static String text(Map<String, AttributeValue> item, String name) {
         AttributeValue value = item.get(name);
         return value == null ? null : value.s();
     }
 
-    private static String nullableText(
-            Map<String, AttributeValue> item,
-            String name
-    ) {
+    private static String nullableText(Map<String, AttributeValue> item, String name) {
         return text(item, name);
     }
 
-    private static int integer(
-            Map<String, AttributeValue> item,
-            String name
-    ) {
+    private static int integer(Map<String, AttributeValue> item, String name) {
         return Math.toIntExact(longValue(item, name));
     }
 
-    private static long longValue(
-            Map<String, AttributeValue> item,
-            String name
-    ) {
+    private static long longValue(Map<String, AttributeValue> item, String name) {
         AttributeValue value = item.get(name);
-        return value == null || value.n() == null
-                ? 0L
-                : Long.parseLong(value.n());
+        return value == null || value.n() == null ? 0L : Long.parseLong(value.n());
     }
 
-    private static Long nullableLong(
-            Map<String, AttributeValue> item,
-            String name
-    ) {
+    private static Long nullableLong(Map<String, AttributeValue> item, String name) {
         AttributeValue value = item.get(name);
-        return value == null || value.n() == null
-                ? null
-                : Long.valueOf(value.n());
+        return value == null || value.n() == null ? null : Long.valueOf(value.n());
     }
 
     private static void validateIdentity(
             String jobId,
             int shardNumber,
             String documentId,
-            String versionId
+            String versionId,
+            VersionIdentityType versionIdentityType
     ) {
         requireText(jobId, "jobId");
         requireText(documentId, "documentId");
         requireText(versionId, "versionId");
+        Objects.requireNonNull(versionIdentityType, "Version identity type is required");
 
         if (shardNumber < 0) {
-            throw new IllegalArgumentException(
-                    "shardNumber cannot be negative"
-            );
+            throw new IllegalArgumentException("shardNumber cannot be negative");
         }
     }
 
