@@ -228,7 +228,7 @@ resource "aws_sfn_state_machine" "migration" {
                 }
                 Overrides = {
                   ContainerOverrides = [{
-                    Name = "migration-worker"
+                    Name        = "migration-worker"
                     "Command.$" = "$.command"
                   }]
                 }
