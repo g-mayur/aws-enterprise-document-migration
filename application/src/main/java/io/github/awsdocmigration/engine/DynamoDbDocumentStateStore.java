@@ -251,7 +251,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         return Optional.of(new DocumentMigrationState(
                 text(item, "documentId"),
                 text(item, "versionId"),
-                text(item, "status"),
+                DocumentMigrationStatus.valueOf(text(item, "status")),
                 integer(item, "attemptCount"),
                 nullableText(item, "leaseOwner"),
                 nullableLong(item, "leaseExpiresAt"),

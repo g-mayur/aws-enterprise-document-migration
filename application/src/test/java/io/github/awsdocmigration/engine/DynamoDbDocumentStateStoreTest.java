@@ -210,7 +210,7 @@ class DynamoDbDocumentStateStoreTest {
         );
 
         assertTrue(result.isPresent());
-        assertEquals("COMPLETED", result.get().status());
+        assertEquals(io.github.awsdocmigration.domain.DocumentMigrationStatus.COMPLETED, result.get().status());
         assertEquals(2, result.get().attemptCount());
         assertEquals("documents/document-1.pdf", result.get().destinationKey());
         assertTrue(result.get().leaseOwner() == null);

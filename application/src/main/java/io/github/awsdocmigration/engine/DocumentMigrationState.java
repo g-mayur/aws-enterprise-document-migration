@@ -1,5 +1,7 @@
 package io.github.awsdocmigration.engine;
 
+import io.github.awsdocmigration.domain.DocumentMigrationStatus;
+
 /**
  * Read model for the durable state of one document version.
  *
@@ -8,7 +10,7 @@ package io.github.awsdocmigration.engine;
 public record DocumentMigrationState(
         String documentId,
         String versionId,
-        String status,
+        DocumentMigrationStatus status,
         int attemptCount,
         String leaseOwner,
         Long leaseExpiresAtEpochMillis,
