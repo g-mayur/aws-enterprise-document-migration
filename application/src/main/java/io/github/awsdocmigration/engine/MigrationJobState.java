@@ -9,6 +9,7 @@ public record MigrationJobState(
         int totalShards,
         String lastError,
         long createdAtEpochMillis,
-        long updatedAtEpochMillis
+        long updatedAtEpochMillis,
+        String manifestFingerprint
 ) {
 }
