@@ -242,19 +242,6 @@ resource "aws_sfn_state_machine" "migration" {
                   }]
                 }
               }
-              Catch = [{
-                ErrorEquals = ["States.ALL"]
-                ResultPath  = "$.workerError"
-                Next        = "RecordShardFailure"
-              }]
-              End = true
-            }
-            RecordShardFailure = {
-              Type = "Pass"
-              Parameters = {
-                "shardNumber.$" = "$.shardNumber"
-                "error.$"       = "$.workerError"
-              }
               End = true
             }
           }
