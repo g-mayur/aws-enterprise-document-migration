@@ -402,7 +402,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
             );
         }
 
-        Map<String, AttributeValue> names = new HashMap<>();
+        Map<String, String> names = new HashMap<>();
         names.put("#status", "status");
         names.put("#workerId", "workerId");
         names.put("#leaseToken", "leaseToken");
