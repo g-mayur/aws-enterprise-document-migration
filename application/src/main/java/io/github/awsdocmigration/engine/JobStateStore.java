@@ -43,6 +43,39 @@ public interface JobStateStore {
 
     List<MigrationShardState> listShards(String jobId);
 
+    /**
+     * Atomically claims a pending shard or reclaims a running shard whose
+     * lease has expired. A successful claim returns a unique fencing token.
+     */
+    Optional<ShardLease> claimShard(
+            String jobId,
+            int shardNumber,
+            String workerId,
+            Instant now,
+            java.time.Duration leaseDuration
+    );
+
+    /**
+     * Extends a lease only while its worker and fencing token still own
+     * an unexpired RUNNING shard.
+     */
+    Optional<ShardLease> renewShardLease(
+            ShardLease lease,
+            Instant now,
+            java.time.Duration leaseDuration
+    );
+
+    /**
+     * Completes or fails a shard only when the supplied lease still owns
+     * the unexpired RUNNING shard.
+     */
+    boolean transitionClaimedShard(
+            ShardLease lease,
+            MigrationShardStatus target,
+            Instant now,
+            String errorMessage
+    );
+
     boolean transitionShard(
             String jobId,
             int shardNumber,
