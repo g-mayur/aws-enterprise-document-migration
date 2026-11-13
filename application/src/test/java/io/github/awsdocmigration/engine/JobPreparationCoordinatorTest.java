@@ -144,8 +144,11 @@ class JobPreparationCoordinatorTest {
                 return false;
             }
             String canonical = fingerprint.toLowerCase(java.util.Locale.ROOT);
-            if (current.manifestFingerprint() != null
-                    && !current.manifestFingerprint().equals(canonical)) {
+            if (current.manifestFingerprint() != null) {
+                return current.manifestFingerprint().equals(canonical);
+            }
+            if (current.status() != MigrationJobStatus.CREATED
+                    && current.status() != MigrationJobStatus.DISCOVERING) {
                 return false;
             }
             jobs.put(jobId, new MigrationJobState(
