@@ -39,12 +39,21 @@ The state machine input is JSON in this shape:
   "sourcePrefix": "exports/",
   "destinationBucket": "destination-bucket-name",
   "manifestS3Uri": "s3://staging-bucket/manifests/migration-2026-001.jsonl",
-  "totalShards": 4,
-  "shards": [0, 1, 2, 3]
+  "totalShards": 2,
+  "shards": [
+    {
+      "shardNumber": 0,
+      "command": ["--mode", "migrate", "--source-type", "s3", "--source-bucket", "source-bucket-name", "--source-prefix", "exports/", "--destination-bucket", "destination-bucket-name", "--manifest-s3-uri", "s3://staging-bucket/manifests/migration-2026-001.jsonl", "--state-table", "document-migration-state", "--job-state-table", "document-migration-job-state", "--job-id", "migration-2026-001", "--total-shards", "2", "--shard-number", "0"]
+    },
+    {
+      "shardNumber": 1,
+      "command": ["--mode", "migrate", "--source-type", "s3", "--source-bucket", "source-bucket-name", "--source-prefix", "exports/", "--destination-bucket", "destination-bucket-name", "--manifest-s3-uri", "s3://staging-bucket/manifests/migration-2026-001.jsonl", "--state-table", "document-migration-state", "--job-state-table", "document-migration-job-state", "--job-id", "migration-2026-001", "--total-shards", "2", "--shard-number", "1"]
+    }
+  ]
 }
 ```
 
-The job must already be prepared in DynamoDB and the manifest must be uploaded to the configured staging bucket. Its fingerprint is checked by each worker against the prepared job. The CLI downloads the S3 manifest to an ephemeral local file before scanning it. The worker task receives the source/destination settings and the shard identity as command-line arguments.
+The job must already be prepared in DynamoDB and the manifest must be uploaded to the configured staging bucket. Its fingerprint is checked by each worker against the prepared job. The CLI downloads the S3 manifest to an ephemeral local file before scanning it. Each `shards` item contains its `shardNumber` and a complete ECS container `command` array. Build the command from the prepared job's source/destination settings and the Terraform output table names; use the matching shard number in each command. Passing the complete array avoids relying on oversized Step Functions intrinsic expressions.
 
 This PR deliberately does not create the job, generate/upload the manifest, publish the container image, or invoke the state machine automatically. Those are separate deployment/ingestion responsibilities. Step Functions coordinates task launch and waits for each Fargate task; DynamoDB remains authoritative for shard claims, leases and terminal state. No automatic Step Functions retry is configured, so orchestration does not bypass the application's durable attempt limits.
 
