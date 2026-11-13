@@ -9,6 +9,10 @@ A checked implementation item means the capability exists in the current starter
 - [x] Sharded migration CLI integrated with durable document state, shard leases, deterministic assignment and job finalization; end-to-end pilot validation remains required.
 - [x] Worker identity, shard/document lease renewal and fencing implemented; long-running and interrupted-worker behavior must still be exercised in the target environment.
 
+## Implemented orchestration safeguards; target-environment validation still required
+
+- [x] Step Functions retries the documented `AmazonECS.Unknown` RunTask rejection twice with exponential backoff; this is limited to ECS API launch rejections before a worker can claim a shard.
+
 ## Outstanding implementation work
 
 - [ ] Multipart upload resume across worker/process restarts implemented.
