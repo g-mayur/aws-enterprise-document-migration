@@ -202,8 +202,8 @@ resource "aws_sfn_state_machine" "migration" {
           "destinationBucket.$" = "$$.Execution.Input.destinationBucket"
           "manifestS3Uri.$"     = "$$.Execution.Input.manifestS3Uri"
           "totalShards.$"       = "$$.Execution.Input.totalShards"
-          "shardNumber.$"       = "$.Map.Item.Value.shardNumber"
-          "command.$"           = "$.Map.Item.Value.command"
+          "shardNumber.$"       = "$$.Map.Item.Value.shardNumber"
+          "command.$"           = "$$.Map.Item.Value.command"
         }
         ItemProcessor = {
           ProcessorConfig = {
