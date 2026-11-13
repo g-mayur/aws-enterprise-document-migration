@@ -1,4 +1,3 @@
-
 package io.github.awsdocmigration;
 
 import io.github.awsdocmigration.connector.DocumentSource;
@@ -7,6 +6,9 @@ import io.github.awsdocmigration.connector.s3.S3Source;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionPolicy;
 import io.github.awsdocmigration.engine.DestinationKeyResolver;
+import io.github.awsdocmigration.engine.DocumentMigrationCoordinator;
+import io.github.awsdocmigration.engine.DocumentStateStore;
+import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -14,6 +16,7 @@ import io.github.awsdocmigration.storage.S3DestinationWriter;
 import io.github.awsdocmigration.util.Checksums;
 
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.InputStream;
@@ -21,9 +24,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.UUID;
 
 public final class MigrationCli {
 
@@ -42,9 +47,14 @@ public final class MigrationCli {
                 System.getenv().getOrDefault("AWS_REGION", "us-east-1")
         );
 
-        try (S3Client s3 = S3Client.builder()
-                .region(Region.of(region))
-                .build()) {
+        try (
+                S3Client s3 = S3Client.builder()
+                        .region(Region.of(region))
+                        .build();
+                DynamoDbClient dynamoDb = DynamoDbClient.builder()
+                        .region(Region.of(region))
+                        .build()
+        ) {
 
             DocumentSource source = createSource(
                     sourceType,
@@ -59,7 +69,12 @@ public final class MigrationCli {
                         Path.of(required(arguments, "manifest-output"))
                 );
 
-                case "migrate" -> migrate(source, s3, arguments);
+                case "migrate" -> migrate(
+                        source,
+                        s3,
+                        dynamoDb,
+                        arguments
+                );
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
@@ -137,32 +152,76 @@ public final class MigrationCli {
     }
 
     /**
-     * Migrates documents using an existing JSONL manifest.
+     * Migrates a JSONL manifest. Durable state is enabled only when
+     * --state-table is supplied, preserving the original stateless mode.
      */
     private static void migrate(
             DocumentSource source,
             S3Client s3,
+            DynamoDbClient dynamoDb,
             Map<String, String> arguments
     ) throws Exception {
 
-        String destinationBucket =
-                required(arguments, "destination-bucket");
+        String destinationBucket = required(arguments, "destination-bucket");
 
         VersionPolicy policy = VersionPolicy.valueOf(
                 arguments.getOrDefault("version-policy", "ALL_VERSIONS")
         );
 
-        Path manifestPath = Path.of(
-                required(arguments, "manifest")
-        );
+        Path manifestPath = Path.of(required(arguments, "manifest"));
+
+        DocumentMigrationCoordinator coordinator = null;
+        String stateTable = arguments.get("state-table");
+
+        if (stateTable != null && !stateTable.isBlank()) {
+            String jobId = required(arguments, "job-id");
+            int shardNumber = parseNonNegativeInt(
+                    arguments.getOrDefault("shard-number", "0"),
+                    "shard-number"
+            );
+            int leaseSeconds = parsePositiveInt(
+                    arguments.getOrDefault("lease-seconds", "300"),
+                    "lease-seconds"
+            );
+            int maximumAttempts = parsePositiveInt(
+                    arguments.getOrDefault("max-attempts", "5"),
+                    "max-attempts"
+            );
+            String workerId = arguments.getOrDefault(
+                    "worker-id",
+                    "worker-" + UUID.randomUUID()
+            );
+
+            DocumentStateStore stateStore =
+                    new DynamoDbDocumentStateStore(dynamoDb, stateTable);
+
+            coordinator = new DocumentMigrationCoordinator(
+                    stateStore,
+                    jobId,
+                    shardNumber,
+                    workerId,
+                    Duration.ofSeconds(leaseSeconds),
+                    maximumAttempts
+            );
+
+        } else if (arguments.containsKey("job-id")
+                || arguments.containsKey("shard-number")
+                || arguments.containsKey("lease-seconds")
+                || arguments.containsKey("max-attempts")
+                || arguments.containsKey("worker-id")) {
+
+            throw new IllegalArgumentException(
+                    "Durable state options require --state-table"
+            );
+        }
 
         long succeeded = 0;
         long failed = 0;
+        long skipped = 0;
 
         try (
                 source;
-                ManifestReader manifestReader =
-                        new ManifestReader(manifestPath)
+                ManifestReader manifestReader = new ManifestReader(manifestPath)
         ) {
 
             source.validateConnection();
@@ -176,19 +235,49 @@ public final class MigrationCli {
             for (DocumentRecord record : manifestReader) {
 
                 try {
+                    if (coordinator == null) {
+                        migrateDocument(
+                                source,
+                                writer,
+                                keyResolver,
+                                record,
+                                policy
+                        );
+                        succeeded++;
+                        continue;
+                    }
 
-                    migrateDocument(
-                            source,
-                            writer,
-                            keyResolver,
-                            record,
-                            policy
-                    );
+                    DocumentMigrationCoordinator.Result result =
+                            coordinator.execute(
+                                    record,
+                                    () -> migrateDocument(
+                                            source,
+                                            writer,
+                                            keyResolver,
+                                            record,
+                                            policy
+                                    )
+                            );
 
-                    succeeded++;
+                    switch (result) {
+                        case COMPLETED -> succeeded++;
+                        case ALREADY_COMPLETED -> {
+                            skipped++;
+                            System.out.println(
+                                    "SKIPPED already completed: "
+                                            + record.idempotencyKey()
+                            );
+                        }
+                        case NOT_CLAIMED -> {
+                            skipped++;
+                            System.out.println(
+                                    "SKIPPED could not claim document: "
+                                            + record.idempotencyKey()
+                            );
+                        }
+                    }
 
                 } catch (Exception e) {
-
                     failed++;
 
                     System.err.println(
@@ -202,9 +291,10 @@ public final class MigrationCli {
         }
 
         System.out.printf(
-                "Migration run finished. succeeded=%d failed=%d%n",
+                "Migration run finished. succeeded=%d failed=%d skipped=%d%n",
                 succeeded,
-                failed
+                failed,
+                skipped
         );
 
         if (failed > 0) {
@@ -244,12 +334,10 @@ public final class MigrationCli {
     }
 
     /**
-     * Downloads, verifies and uploads one document.
-     *
-     * The downloaded size must match the manifest before
-     * checksum calculation and destination upload.
+     * Downloads, verifies and uploads one document, returning the
+     * destination identity needed for durable completion state.
      */
-    static void migrateDocument(
+    static DocumentMigrationCoordinator.MigrationOutcome migrateDocument(
             DocumentSource source,
             DestinationWriter writer,
             DestinationKeyResolver keyResolver,
@@ -261,10 +349,7 @@ public final class MigrationCli {
 
         try (InputStream input = source.openStream(record)) {
 
-            temporaryFile = Files.createTempFile(
-                    "migration-",
-                    ".bin"
-            );
+            temporaryFile = Files.createTempFile("migration-", ".bin");
 
             Files.copy(
                     input,
@@ -275,14 +360,11 @@ public final class MigrationCli {
             long actualSize = Files.size(temporaryFile);
 
             if (actualSize != record.sizeBytes()) {
-
                 throw new IllegalStateException(
                         "Downloaded size mismatch for "
                                 + record.idempotencyKey()
-                                + ": expected="
-                                + record.sizeBytes()
-                                + ", actual="
-                                + actualSize
+                                + ": expected=" + record.sizeBytes()
+                                + ", actual=" + actualSize
                 );
             }
 
@@ -290,7 +372,6 @@ public final class MigrationCli {
 
             try (InputStream verificationStream =
                          Files.newInputStream(temporaryFile)) {
-
                 digest = Checksums.sha256(verificationStream);
             }
 
@@ -298,10 +379,8 @@ public final class MigrationCli {
 
             if (expectedChecksum != null
                     && !expectedChecksum.equalsIgnoreCase(digest)) {
-
                 throw new IllegalStateException(
-                        "SHA-256 mismatch for "
-                                + record.idempotencyKey()
+                        "SHA-256 mismatch for " + record.idempotencyKey()
                 );
             }
 
@@ -309,20 +388,52 @@ public final class MigrationCli {
 
             try (InputStream uploadStream =
                          Files.newInputStream(temporaryFile)) {
-
-                writer.write(
-                        record,
-                        destinationKey,
-                        uploadStream,
-                        digest
-                );
+                writer.write(record, destinationKey, uploadStream, digest);
             }
 
-        } finally {
+            return new DocumentMigrationCoordinator.MigrationOutcome(
+                    destinationKey,
+                    digest
+            );
 
+        } finally {
             if (temporaryFile != null) {
                 Files.deleteIfExists(temporaryFile);
             }
+        }
+    }
+
+    private static int parsePositiveInt(String value, String name) {
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < 1) {
+                throw new IllegalArgumentException(
+                        "--" + name + " must be at least 1"
+                );
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "--" + name + " must be a positive integer",
+                    e
+            );
+        }
+    }
+
+    private static int parseNonNegativeInt(String value, String name) {
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < 0) {
+                throw new IllegalArgumentException(
+                        "--" + name + " cannot be negative"
+                );
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "--" + name + " must be a non-negative integer",
+                    e
+            );
         }
     }
 
@@ -338,7 +449,6 @@ public final class MigrationCli {
             if (!args[i].startsWith("--")
                     || i + 1 >= args.length
                     || args[i + 1].startsWith("--")) {
-
                 throw new IllegalArgumentException(
                         "Expected --name value arguments"
                 );
@@ -369,9 +479,7 @@ public final class MigrationCli {
         String value = arguments.get(key);
 
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Missing --" + key
-            );
+            throw new IllegalArgumentException("Missing --" + key);
         }
 
         return value;
