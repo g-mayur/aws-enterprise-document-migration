@@ -64,7 +64,7 @@ public final class JobFinalizationCoordinator {
                 continue;
             }
             if (shard.status() != MigrationShardStatus.FAILED
-                    || shard.attemptCount() < DynamoDbJobStateStore.MAX_SHARD_ATTEMPTS) {
+                    || shard.attemptCount() < JobStateStore.MAX_SHARD_ATTEMPTS) {
                 return Optional.empty();
             }
 
