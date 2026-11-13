@@ -55,6 +55,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         item.put("jobId", s(jobId));
         item.put("status", s(MigrationJobStatus.CREATED.name()));
         item.put("totalShards", n(totalShards));
+        item.put("shardCount", n(0));
         item.put("createdAt", n(timestamp));
         item.put("updatedAt", n(timestamp));
 
@@ -116,6 +117,11 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         values.put(":target", s(target.name()));
         values.put(":now", n(now.toEpochMilli()));
 
+        String condition = "#status = :expected";
+        if (target == MigrationJobStatus.READY) {
+            condition += " AND #shardCount = #totalShards";
+        }
+
         String update = "SET #status = :target, #updatedAt = :now";
         if (target == MigrationJobStatus.FAILED && hasText(errorMessage)) {
             values.put(":error", s(safeError(errorMessage)));
@@ -129,11 +135,13 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     .tableName(tableName)
                     .key(key(jobId, "JOB"))
                     .updateExpression(update)
-                    .conditionExpression("#status = :expected")
+                    .conditionExpression(condition)
                     .expressionAttributeNames(Map.of(
                             "#status", "status",
                             "#updatedAt", "updatedAt",
-                            "#lastError", "lastError"
+                            "#lastError", "lastError",
+                            "#shardCount", "shardCount",
+                            "#totalShards", "totalShards"
                     ))
                     .expressionAttributeValues(values)
                     .build());
@@ -162,22 +170,30 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         item.put("createdAt", n(timestamp));
         item.put("updatedAt", n(timestamp));
 
+        Map<String, AttributeValue> updateValues = Map.of(
+                ":discovering", s(MigrationJobStatus.DISCOVERING.name()),
+                ":one", n(1),
+                ":shardNumber", n(shardNumber)
+        );
+
         try {
             dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
                     .transactItems(
-                            TransactWriteItem.builder().conditionCheck(
-                                    ConditionCheck.builder()
+                            TransactWriteItem.builder().update(
+                                    software.amazon.awssdk.services.dynamodb.model.Update.builder()
                                             .tableName(tableName)
                                             .key(key(jobId, "JOB"))
-                                            .conditionExpression("#status = :discovering AND #totalShards > :shardNumber")
+                                            .updateExpression("ADD #shardCount :one")
+                                            .conditionExpression(
+                                                    "#status = :discovering AND #shardCount < #totalShards "
+                                                            + "AND :shardNumber < #totalShards"
+                                            )
                                             .expressionAttributeNames(Map.of(
                                                     "#status", "status",
+                                                    "#shardCount", "shardCount",
                                                     "#totalShards", "totalShards"
                                             ))
-                                            .expressionAttributeValues(Map.of(
-                                                    ":discovering", s(MigrationJobStatus.DISCOVERING.name()),
-                                                    ":shardNumber", n(shardNumber)
-                                            ))
+                                            .expressionAttributeValues(updateValues)
                                             .build()
                             ).build(),
                             TransactWriteItem.builder().put(
