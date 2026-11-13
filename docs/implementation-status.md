@@ -19,7 +19,8 @@ This document describes the current starter implementation. A successful build d
 | CLI state integration | Not implemented | MigrationCli does not yet use the state repository |
 | Durable retry orchestration | Partial foundation | Attempt limits and lease reclamation are supported by the repository; worker integration is pending |
 | Resumable multipart upload | Not implemented | Upload state and completed parts are not persisted across process restarts |
-| Migration job and shard lifecycle | Implemented (starter) | Separate DynamoDB job-state table; conditional job/shard transitions and shard registration |
+| Migration job and shard lifecycle | Implemented (starter) | Separate DynamoDB job-state table; conditional job/shard transitions, shard registration, and recoverable worker leases with expiry |
+| Shard lease recovery and fencing | Implemented (starter) | Atomic claim, lease renewal, expiry-based reclaim, and fencing-token checks prevent a stale worker from completing a shard after ownership changes |
 | Manifest fingerprinting and job preparation | Implemented (starter) | Exact manifest bytes are SHA-256 hashed as a stream; job preparation binds the fingerprint before shard registration and rejects a different manifest or shard configuration on resume |
 | Job preparation | Implemented (starter) | Resumable preparation registers contiguous shards and moves a job to READY only after registration is complete |
 | Deterministic shard assignment | Implemented (starter) | SHA-256 assignment from document/version identity; independent of manifest ordering |
