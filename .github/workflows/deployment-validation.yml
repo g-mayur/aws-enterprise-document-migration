@@ -60,7 +60,7 @@ jobs:
       - name: Check shell syntax and help output
         run: |
           bash -n scripts/deployment-preflight.sh
-          scripts/deployment-preflight.sh --help
+          bash scripts/deployment-preflight.sh --help
 
   container:
     name: Build worker container
