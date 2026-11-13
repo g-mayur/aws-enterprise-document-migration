@@ -244,11 +244,13 @@ class DynamoDbJobStateStoreIntegrationTest {
                 "expired-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(5)
         ).orElseThrow();
 
+        // The lease expires exactly at NOW + 8 seconds.
+        // At the expiry boundary, renewal and completion must both be rejected.
         assertTrue(store.renewShardLease(
-                lease, NOW.plusSeconds(7), Duration.ofSeconds(10)
+                lease, NOW.plusSeconds(8), Duration.ofSeconds(10)
         ).isEmpty());
         assertFalse(store.transitionClaimedShard(
-                lease, MigrationShardStatus.FAILED, NOW.plusSeconds(7), "late failure"
+                lease, MigrationShardStatus.FAILED, NOW.plusSeconds(8), "late failure"
         ));
     }
 
