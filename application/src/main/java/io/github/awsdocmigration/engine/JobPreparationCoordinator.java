@@ -42,6 +42,12 @@ public final class JobPreparationCoordinator {
         requireText(jobId, "jobId");
         Objects.requireNonNull(now, "Preparation time is required");
 
+        if (totalShards < 0) {
+            throw new IllegalArgumentException(
+                    "totalShards cannot be negative"
+            );
+        }
+
         if (manifestFingerprint == null
                 || !manifestFingerprint.matches("[A-Fa-f0-9]{64}")) {
             throw new IllegalArgumentException(
@@ -50,6 +56,18 @@ public final class JobPreparationCoordinator {
         }
 
         stateStore.createJob(jobId, totalShards, now);
+
+        MigrationJobState existingJob = stateStore.getJob(jobId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Job does not exist after create attempt: " + jobId
+                ));
+
+        if (existingJob.totalShards() != totalShards) {
+            throw new IllegalStateException(
+                    "Existing job has " + existingJob.totalShards()
+                            + " shards; requested " + totalShards
+            );
+        }
 
         if (!stateStore.bindManifestFingerprint(
                 jobId,
