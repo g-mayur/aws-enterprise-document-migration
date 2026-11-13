@@ -105,6 +105,12 @@ class DynamoDbJobStateStoreIntegrationTest {
         assertTrue(store.createJob("fingerprint-job", 0, NOW));
         assertTrue(store.bindManifestFingerprint("fingerprint-job", original));
         assertTrue(store.bindManifestFingerprint("fingerprint-job", original.toLowerCase()));
+        assertTrue(store.transitionJob("fingerprint-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.transitionJob("fingerprint-job", MigrationJobStatus.DISCOVERING,
+                MigrationJobStatus.READY, NOW.plusSeconds(2), null));
+
+        assertTrue(store.bindManifestFingerprint("fingerprint-job", original));
         assertFalse(store.bindManifestFingerprint("fingerprint-job", conflicting));
         assertFalse(store.bindManifestFingerprint("missing-job", original));
 
