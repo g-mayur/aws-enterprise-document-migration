@@ -11,6 +11,7 @@ import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
@@ -168,11 +169,14 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                                     ConditionCheck.builder()
                                             .tableName(tableName)
                                             .key(key(jobId, "JOB"))
-                                            .conditionExpression("#status = :discovering")
-                                            .expressionAttributeNames(Map.of("#status", "status"))
+                                            .conditionExpression("#status = :discovering AND #totalShards > :shardNumber")
+                                            .expressionAttributeNames(Map.of(
+                                                    "#status", "status",
+                                                    "#totalShards", "totalShards"
+                                            ))
                                             .expressionAttributeValues(Map.of(
-                                                    ":discovering",
-                                                    s(MigrationJobStatus.DISCOVERING.name())
+                                                    ":discovering", s(MigrationJobStatus.DISCOVERING.name()),
+                                                    ":shardNumber", n(shardNumber)
                                             ))
                                             .build()
                             ).build(),
@@ -186,8 +190,14 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     )
                     .build());
             return true;
-        } catch (ConditionalCheckFailedException | software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException rejected) {
-            return false;
+        } catch (TransactionCanceledException rejected) {
+            boolean conditionalFailure = rejected.cancellationReasons() != null
+                    && rejected.cancellationReasons().stream()
+                            .anyMatch(reason -> "ConditionalCheckFailed".equals(reason.code()));
+            if (conditionalFailure) {
+                return false;
+            }
+            throw rejected;
         }
     }
 
