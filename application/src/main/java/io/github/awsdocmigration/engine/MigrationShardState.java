@@ -9,6 +9,7 @@ public record MigrationShardState(
         MigrationShardStatus status,
         String workerId,
         String lastError,
+        int attemptCount,
         long createdAtEpochMillis,
         long updatedAtEpochMillis
 ) {
