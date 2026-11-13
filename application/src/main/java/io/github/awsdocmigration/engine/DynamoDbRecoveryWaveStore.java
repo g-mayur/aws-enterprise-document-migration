@@ -150,6 +150,7 @@ public final class DynamoDbRecoveryWaveStore {
     ) {
         Objects.requireNonNull(lease, "Recovery wave lease is required");
         Objects.requireNonNull(now, "Update time is required");
+        requireText(executionStatus, "executionStatus");
         if (!List.of("UNKNOWN", "RUNNING", "SUCCEEDED", "FAILED",
                 "TIMED_OUT", "ABORTED", "NONEXISTENT").contains(executionStatus)) {
             throw new IllegalArgumentException("Unsupported execution status: " + executionStatus);
@@ -161,7 +162,6 @@ public final class DynamoDbRecoveryWaveStore {
         boolean terminal = TERMINAL_EXECUTION_STATUSES.contains(executionStatus);
         Map<String, AttributeValue> values = new HashMap<>();
         values.put(":active", s("ACTIVE"));
-        values.put(":terminal", s("TERMINAL"));
         values.put(":generation", n(lease.generation()));
         values.put(":ownerToken", s(lease.ownerToken()));
         values.put(":waveId", s(lease.waveId()));
