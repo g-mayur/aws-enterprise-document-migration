@@ -6,12 +6,16 @@ on:
     paths:
       - "application/**"
       - "infrastructure/**"
+      - "scripts/**"
+      - "docs/deployment-validation.md"
       - ".github/workflows/deployment-validation.yml"
   push:
     branches: [main]
     paths:
       - "application/**"
       - "infrastructure/**"
+      - "scripts/**"
+      - "docs/deployment-validation.md"
       - ".github/workflows/deployment-validation.yml"
 
 permissions:
@@ -45,6 +49,18 @@ jobs:
 
       - name: Validate bootstrap configuration
         run: terraform -chdir=infrastructure/bootstrap validate -no-color
+
+  preflight-script:
+    name: Deployment preflight script checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax and help output
+        run: |
+          bash -n scripts/deployment-preflight.sh
+          bash scripts/deployment-preflight.sh --help
 
   container:
     name: Build worker container

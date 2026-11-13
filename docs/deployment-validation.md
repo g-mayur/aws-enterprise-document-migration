@@ -33,7 +33,17 @@ From the repository root, use the target account, Region and an immutable commit
 
 Do not overwrite a published tag. Record the image digest for deployment evidence. If using an existing ECR/network environment, set ECR_URI to its approved repository URL instead.
 
-## 4. Validate and deploy the workload Terraform stack
+## 4. Run the read-only deployment preflight
+
+After the bootstrap stack is applied and the immutable worker image is published, run this check from the repository root. It verifies the active AWS account and Region, both Terraform configurations, bootstrap subnet/security-group outputs, private subnet placement across two Availability Zones, and the ECR repository's immutable tag plus published image digest.
+
+    export AWS_REGION=$(terraform -chdir=infrastructure/bootstrap output -raw aws_region)
+    export WORKER_IMAGE="$ECR_URI:$IMAGE_TAG"
+    bash scripts/deployment-preflight.sh
+
+The script makes read-only AWS API calls and does not apply Terraform, publish images, create resources, or start a migration. It requires the local bootstrap Terraform state and initialized Terraform providers for both roots. Stop if the account, Region, image digest, or network checks do not match the approved deployment target.
+
+## 5. Validate and deploy the workload Terraform stack
 
 From the repository root:
 
@@ -63,7 +73,7 @@ Review the complete plan, IAM permissions, bucket names, network routes/endpoint
 
 Keep the plan and state in approved secure storage. Do not apply a plan that creates or changes resources outside the reviewed scope.
 
-## 5. Prepare a small migration job
+## 6. Prepare a small migration job
 
 Use a small JSONL manifest containing test documents only. The same exact manifest bytes must be used for job preparation and worker execution.
 
@@ -83,11 +93,11 @@ Upload that unchanged manifest to the staging bucket:
 
 Before continuing, confirm job preparation completed successfully and that the source bucket, destination bucket, manifest URI, shard count, and configured DynamoDB table names are correct.
 
-## 6. Start the Step Functions execution
+## 7. Start the Step Functions execution
 
 Use the state machine ARN from Terraform output. Supply one shard number for each registered shard. The execution input shape and complete per-shard command arrays are documented in infrastructure/README.md. Replace all example values and table names with deployed values. Do not start a second execution for the same test job while the first is running.
 
-## 7. Verify and record the pilot
+## 8. Verify and record the pilot
 
 - Confirm the Step Functions execution reaches SUCCEEDED; inspect failed Map items and ECS task logs if it does not.
 - Confirm expected ECS tasks started and stopped, and review CloudWatch logs for errors.
@@ -100,4 +110,4 @@ A successful orchestration execution alone is not proof of data correctness. Do 
 
 ## Scope and limitations
 
-CI formats/validates Terraform and builds the container; it does not authenticate to AWS, publish images, apply Terraform, or start executions. The bootstrap stack provisions only the private network, endpoints and ECR repository. Workload deployment, source-system access, migration data, production monitoring and alarms remain explicit operator responsibilities.
+CI formats/validates Terraform, checks the preflight script's shell syntax/help output, and builds the container; it does not authenticate to AWS, publish images, apply Terraform, or start executions. The bootstrap stack provisions only the private network, endpoints and ECR repository. Workload deployment, source-system access, migration data, production monitoring and alarms remain explicit operator responsibilities.
