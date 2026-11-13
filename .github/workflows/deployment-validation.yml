@@ -32,7 +32,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Check Terraform formatting
-        run: terraform -chdir=infrastructure fmt -check -recursive
+        run: terraform -chdir=infrastructure fmt -check -diff -recursive
 
       - name: Initialize providers without backend
         run: terraform -chdir=infrastructure init -backend=false -input=false
