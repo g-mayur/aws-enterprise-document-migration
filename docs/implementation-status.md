@@ -24,8 +24,9 @@ This document describes the current starter implementation. A successful build d
 | Shard lease recovery and fencing | Implemented (starter) | Atomic claim, lease renewal, expiry-based reclaim, and fencing-token checks prevent a stale worker from completing a shard after ownership changes |
 | Manifest fingerprinting and job preparation | Implemented (starter) | Exact manifest bytes are SHA-256 hashed as a stream; job preparation binds the fingerprint before shard registration and rejects a different manifest or shard configuration on resume |
 | Job preparation | Implemented (starter) | CLI fingerprints exact manifest bytes, binds the fingerprint, registers contiguous shards and moves the job to READY before execution |
+| Job-level finalization | Implemented (starter) | A running job finalizes only when every registered shard is COMPLETED or FAILED after all three claims are exhausted; retry-eligible failures and PENDING/RUNNING shards block finalization. Mixed outcomes become COMPLETED_WITH_ERRORS with aggregated shard errors |
 | Deterministic shard assignment | Implemented (starter) | SHA-256 assignment from document/version identity; independent of manifest ordering; CLI executes only the selected shard |
-| Distributed orchestration | Partial foundation | CLI can execute a selected shard on independently launched workers; ECS dispatch, automatic retry and job-level finalization are pending |
+| Distributed orchestration | Partial foundation | CLI can execute a selected shard on independently launched workers; ECS dispatch and automatic retry are pending |
 | Production monitoring/alarms | Not implemented | Define SLOs, metrics and dashboards |
 
 Do not describe this release as production-ready until all relevant production-readiness gates pass.

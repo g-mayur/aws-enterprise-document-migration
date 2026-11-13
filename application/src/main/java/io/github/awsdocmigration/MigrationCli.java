@@ -12,6 +12,7 @@ import io.github.awsdocmigration.engine.DocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
 import io.github.awsdocmigration.engine.JobPreparationCoordinator;
+import io.github.awsdocmigration.engine.JobFinalizationCoordinator;
 import io.github.awsdocmigration.engine.JobStateStore;
 import io.github.awsdocmigration.engine.ManifestFingerprint;
 import io.github.awsdocmigration.engine.MigrationJobState;
@@ -36,6 +37,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class MigrationCli {
@@ -504,16 +506,28 @@ public final class MigrationCli {
                             maximumAttempts
                     );
 
-            ShardExecutionCoordinator.Result result = execution.execute(
-                    manifestPath,
-                    record -> migrateDocument(
-                            source,
-                            writer,
-                            keyResolver,
-                            record,
-                            policy
-                    )
-            );
+            ShardExecutionCoordinator.Result result;
+            try {
+                result = execution.execute(
+                        manifestPath,
+                        record -> migrateDocument(
+                                source,
+                                writer,
+                                keyResolver,
+                                record,
+                                policy
+                        )
+                );
+            } catch (Exception executionFailure) {
+                try {
+                    reportJobFinalization(jobStateStore, jobId);
+                } catch (Exception finalizationFailure) {
+                    executionFailure.addSuppressed(finalizationFailure);
+                }
+                throw executionFailure;
+            }
+
+            reportJobFinalization(jobStateStore, jobId);
 
             System.out.printf(
                     "Shard execution completed. job=%s shard=%d assigned=%d "
@@ -526,6 +540,22 @@ public final class MigrationCli {
                     workerId
             );
         }
+    }
+
+    private static void reportJobFinalization(
+            JobStateStore jobStateStore,
+            String jobId
+    ) {
+        Optional<MigrationJobState> finalized =
+                new JobFinalizationCoordinator(jobStateStore)
+                        .finalizeIfReady(jobId, Instant.now());
+
+        System.out.printf(
+                "Job finalization status. job=%s status=%s%n",
+                jobId,
+                finalized.map(state -> state.status().name())
+                        .orElse("WAITING_FOR_SHARDS")
+        );
     }
 
     /**

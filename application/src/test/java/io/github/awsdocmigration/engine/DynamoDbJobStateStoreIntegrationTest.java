@@ -355,4 +355,23 @@ class DynamoDbJobStateStoreIntegrationTest {
                 store.getJob("job-4").orElseThrow().status());
         assertEquals(3, store.listShards("job-4").size());
     }
+
+    @Test
+    void completedWithErrorsPersistsAggregatedShardFailures() {
+        assertTrue(store.createJob("partial-job", 0, NOW));
+        assertTrue(store.transitionJob("partial-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.transitionJob("partial-job", MigrationJobStatus.DISCOVERING,
+                MigrationJobStatus.READY, NOW.plusSeconds(2), null));
+        assertTrue(store.transitionJob("partial-job", MigrationJobStatus.READY,
+                MigrationJobStatus.RUNNING, NOW.plusSeconds(3), null));
+
+        String aggregate = "Shard 1: source object missing; Shard 2: checksum mismatch";
+        assertTrue(store.transitionJob("partial-job", MigrationJobStatus.RUNNING,
+                MigrationJobStatus.COMPLETED_WITH_ERRORS, NOW.plusSeconds(4), aggregate));
+
+        MigrationJobState completed = store.getJob("partial-job").orElseThrow();
+        assertEquals(MigrationJobStatus.COMPLETED_WITH_ERRORS, completed.status());
+        assertEquals(aggregate, completed.lastError());
+    }
 }
