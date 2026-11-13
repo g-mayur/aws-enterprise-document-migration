@@ -8,6 +8,7 @@ import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionPolicy;
 import io.github.awsdocmigration.engine.DestinationKeyResolver;
 import io.github.awsdocmigration.engine.ManifestReader;
+import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
 import io.github.awsdocmigration.storage.S3DestinationWriter;
 import io.github.awsdocmigration.util.Checksums;
@@ -16,10 +17,12 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.InputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 public final class MigrationCli {
@@ -31,9 +34,9 @@ public final class MigrationCli {
 
         Map<String, String> arguments = parse(args);
 
+        String mode = arguments.getOrDefault("mode", "migrate");
+
         String sourceType = required(arguments, "source-type");
-        String destinationBucket =
-                required(arguments, "destination-bucket");
 
         String region = arguments.getOrDefault(
                 "region",
@@ -42,6 +45,108 @@ public final class MigrationCli {
                         "us-east-1"
                 )
         );
+
+        try (S3Client s3 = S3Client.builder()
+                .region(Region.of(region))
+                .build()) {
+
+            DocumentSource source = createSource(
+                    sourceType,
+                    arguments,
+                    s3
+            );
+
+            switch (mode) {
+
+                case "generate-manifest" -> generateManifest(
+                        source,
+                        Path.of(required(arguments, "manifest-output"))
+                );
+
+                case "migrate" -> migrate(
+                        source,
+                        s3,
+                        arguments
+                );
+
+                default -> throw new IllegalArgumentException(
+                        "Unsupported mode: " + mode
+                                + ". Supported modes: generate-manifest, migrate"
+                );
+            }
+        }
+    }
+
+    /**
+     * Discovers source documents and writes their records to a JSONL manifest.
+     *
+     * A failed discovery or write removes the incomplete manifest.
+     * Existing manifest files are never overwritten.
+     */
+    private static void generateManifest(
+            DocumentSource source,
+            Path manifestPath
+    ) throws Exception {
+
+        long discovered = 0;
+
+        try (source) {
+
+            source.validateConnection();
+
+            /*
+             * ManifestWriter uses CREATE_NEW.
+             * It refuses to overwrite an existing manifest.
+             */
+            ManifestWriter writer = new ManifestWriter(manifestPath);
+
+            try (writer) {
+
+                Iterator<DocumentRecord> records = source.discover();
+
+                while (records.hasNext()) {
+
+                    DocumentRecord record = records.next();
+
+                    writer.write(record);
+
+                    discovered++;
+                }
+
+            } catch (Exception e) {
+
+                /*
+                 * The manifest was created by this run.
+                 * Remove it because discovery or writing failed.
+                 */
+                try {
+                    Files.deleteIfExists(manifestPath);
+                } catch (IOException cleanupError) {
+                    e.addSuppressed(cleanupError);
+                }
+
+                throw e;
+            }
+        }
+
+        System.out.printf(
+                "Manifest generation completed. discovered=%d manifest=%s%n",
+                discovered,
+                manifestPath.toAbsolutePath()
+        );
+    }
+
+    /**
+     * Migrates documents using an existing JSONL manifest.
+     */
+    private static void migrate(
+            DocumentSource source,
+            S3Client s3,
+            Map<String, String> arguments
+    ) throws Exception {
+
+        String destinationBucket =
+                required(arguments, "destination-bucket");
 
         VersionPolicy policy = VersionPolicy.valueOf(
                 arguments.getOrDefault(
@@ -57,59 +162,48 @@ public final class MigrationCli {
         long succeeded = 0;
         long failed = 0;
 
-        try (S3Client s3 = S3Client.builder()
-                .region(Region.of(region))
-                .build()) {
+        try (
+                source;
+                ManifestReader manifestReader =
+                        new ManifestReader(manifestPath)
+        ) {
 
-            DocumentSource source = createSource(
-                    sourceType,
-                    arguments,
-                    s3
-            );
+            source.validateConnection();
 
-            try (
-                    source;
-                    ManifestReader manifestReader =
-                            new ManifestReader(manifestPath)
-            ) {
+            DestinationWriter writer =
+                    new S3DestinationWriter(
+                            s3,
+                            destinationBucket
+                    );
 
-                source.validateConnection();
+            DestinationKeyResolver keyResolver =
+                    new DestinationKeyResolver();
 
-                DestinationWriter writer =
-                        new S3DestinationWriter(
-                                s3,
-                                destinationBucket
-                        );
+            for (DocumentRecord record : manifestReader) {
 
-                DestinationKeyResolver keyResolver =
-                        new DestinationKeyResolver();
+                try {
 
-                for (DocumentRecord record : manifestReader) {
+                    migrateDocument(
+                            source,
+                            writer,
+                            keyResolver,
+                            record,
+                            policy
+                    );
 
-                    try {
-                        migrateDocument(
-                                source,
-                                writer,
-                                keyResolver,
-                                record,
-                                policy
-                        );
+                    succeeded++;
 
-                        succeeded++;
+                } catch (Exception e) {
 
-                    } catch (Exception e) {
+                    failed++;
 
-                        failed++;
-
-                        System.err.println(
-                                "FAILED "
-                                        + record.idempotencyKey()
-                                        + ": "
-                                        + e.getMessage()
-                        );
-                    }
+                    System.err.println(
+                            "FAILED "
+                                    + record.idempotencyKey()
+                                    + ": "
+                                    + e.getMessage()
+                    );
                 }
-
             }
         }
 
@@ -120,6 +214,7 @@ public final class MigrationCli {
         );
 
         if (failed > 0) {
+
             throw new IllegalStateException(
                     "Migration completed with "
                             + failed
@@ -128,6 +223,9 @@ public final class MigrationCli {
         }
     }
 
+    /**
+     * Creates the configured source connector.
+     */
     private static DocumentSource createSource(
             String sourceType,
             Map<String, String> arguments,
@@ -157,6 +255,9 @@ public final class MigrationCli {
         };
     }
 
+    /**
+     * Downloads, verifies and uploads one document.
+     */
     private static void migrateDocument(
             DocumentSource source,
             DestinationWriter writer,
@@ -224,6 +325,9 @@ public final class MigrationCli {
         }
     }
 
+    /**
+     * Parses command-line arguments in --name value format.
+     */
     private static Map<String, String> parse(String[] args) {
 
         Map<String, String> arguments = new HashMap<>();
@@ -242,6 +346,7 @@ public final class MigrationCli {
             String key = args[i].substring(2);
 
             if (arguments.containsKey(key)) {
+
                 throw new IllegalArgumentException(
                         "Duplicate argument: --" + key
                 );
@@ -253,6 +358,9 @@ public final class MigrationCli {
         return arguments;
     }
 
+    /**
+     * Returns a required non-empty command-line argument.
+     */
     private static String required(
             Map<String, String> arguments,
             String key
@@ -261,6 +369,7 @@ public final class MigrationCli {
         String value = arguments.get(key);
 
         if (value == null || value.isBlank()) {
+
             throw new IllegalArgumentException(
                     "Missing --" + key
             );
