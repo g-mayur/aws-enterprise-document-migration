@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.sfn.SfnClient;
+import software.amazon.awssdk.services.sfn.model.DescribeExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.DescribeExecutionResponse;
 import software.amazon.awssdk.services.sfn.model.ExecutionAlreadyExistsException;
 import software.amazon.awssdk.services.sfn.model.ExecutionListItem;
@@ -146,7 +147,9 @@ public final class StepFunctionsRecoveryWaveDispatcher {
 
         final DescribeExecutionResponse described;
         try {
-            described = stepFunctions.describeExecution(builder -> builder.executionArn(executionArn));
+            described = stepFunctions.describeExecution(DescribeExecutionRequest.builder()
+                    .executionArn(executionArn)
+                    .build());
         } catch (SdkException describeFailure) {
             return persistUnknown(lease, executionArn, now);
         }
