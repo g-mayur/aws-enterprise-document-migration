@@ -507,6 +507,8 @@ public final class DynamoDbJobStateStore implements JobStateStore {
             update += ", #workerId = :worker";
         } else if (expected == MigrationShardStatus.RUNNING) {
             attributesToRemove.add("#workerId");
+            attributesToRemove.add("#leaseToken");
+            attributesToRemove.add("#leaseExpiresAt");
         }
 
         if (target == MigrationShardStatus.FAILED && hasText(errorMessage)) {
@@ -523,7 +525,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         String condition = "#status = :expected";
         if (expected == MigrationShardStatus.RUNNING) {
             values.put(":worker", s(workerId));
-            condition += " AND #workerId = :worker";
+            condition += " AND #workerId = :worker AND attribute_not_exists(#leaseToken)";
         }
 
         try {
@@ -567,6 +569,10 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         names.put("#status", "status");
         names.put("#updatedAt", "updatedAt");
         names.put("#workerId", "workerId");
+        if (expected == MigrationShardStatus.RUNNING) {
+            names.put("#leaseToken", "leaseToken");
+            names.put("#leaseExpiresAt", "leaseExpiresAt");
+        }
         if (target != MigrationShardStatus.FAILED || hasText(errorMessage)) {
             names.put("#lastError", "lastError");
         }
