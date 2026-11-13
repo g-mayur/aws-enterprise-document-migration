@@ -67,6 +67,7 @@ public final class DynamoDbRecoveryWaveStore {
 
         List<Integer> selected = normalizeShards(selectedShardNumbers);
         String digest = digest(selected);
+        String deterministicExecutionName = deterministicExecutionName(jobId, waveId, executionName);
         Map<String, AttributeValue> values = new HashMap<>();
         values.put(":zero", n(0));
         values.put(":one", n(1));
@@ -75,7 +76,7 @@ public final class DynamoDbRecoveryWaveStore {
         values.put(":selectedShards", AttributeValue.builder()
                 .l(selected.stream().map(DynamoDbRecoveryWaveStore::n).toList()).build());
         values.put(":selectedShardDigest", s(digest));
-        values.put(":executionName", s(executionName));
+        values.put(":executionName", s(deterministicExecutionName));
         values.put(":active", s("ACTIVE"));
         values.put(":unknown", s("UNKNOWN"));
         values.put(":now", n(now.toEpochMilli()));
@@ -130,7 +131,7 @@ public final class DynamoDbRecoveryWaveStore {
                 throw new IllegalStateException("DynamoDB did not return the recovery wave generation");
             }
             return Optional.of(new RecoveryWaveLease(
-                    jobId, waveId, ownerToken, generation, selected, digest, executionName, now
+                    jobId, waveId, ownerToken, generation, selected, digest, deterministicExecutionName, now
             ));
         } catch (ConditionalCheckFailedException activeWaveExists) {
             return Optional.empty();
@@ -278,6 +279,26 @@ public final class DynamoDbRecoveryWaveStore {
             }
         }
         return List.copyOf(selected);
+    }
+
+    /**
+     * Produces a Step Functions-safe name that is stable for this job/wave
+     * identity and distinct when a new wave ID is used. The caller-provided
+     * value is included as a salt for compatibility with existing callers.
+     */
+    private static String deterministicExecutionName(
+            String jobId,
+            String waveId,
+            String requestedName
+    ) {
+        try {
+            String identity = jobId + "|" + waveId + "|" + requestedName;
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(identity.getBytes(StandardCharsets.UTF_8));
+            return "recovery-" + HexFormat.of().formatHex(hash).substring(0, 32);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static String digest(List<Integer> selected) {
