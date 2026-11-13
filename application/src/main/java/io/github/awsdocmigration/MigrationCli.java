@@ -12,6 +12,7 @@ import io.github.awsdocmigration.engine.DocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
 import io.github.awsdocmigration.engine.JobPreparationCoordinator;
+import io.github.awsdocmigration.engine.JobFinalizationCoordinator;
 import io.github.awsdocmigration.engine.JobStateStore;
 import io.github.awsdocmigration.engine.ManifestFingerprint;
 import io.github.awsdocmigration.engine.MigrationJobState;
@@ -36,6 +37,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class MigrationCli {
@@ -513,6 +515,17 @@ public final class MigrationCli {
                             record,
                             policy
                     )
+            );
+
+            Optional<MigrationJobState> finalized =
+                    new JobFinalizationCoordinator(jobStateStore)
+                            .finalizeIfReady(jobId, Instant.now());
+
+            System.out.printf(
+                    "Job finalization status. job=%s status=%s%n",
+                    jobId,
+                    finalized.map(state -> state.status().name())
+                            .orElse("WAITING_FOR_SHARDS")
             );
 
             System.out.printf(
