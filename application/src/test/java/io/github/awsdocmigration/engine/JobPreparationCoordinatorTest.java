@@ -156,6 +156,26 @@ class JobPreparationCoordinatorTest {
     }
 
     @Test
+    void rejectsShardCountMismatchBeforeBindingFingerprint() {
+        InMemoryJobStateStore store = new InMemoryJobStateStore();
+        JobPreparationCoordinator coordinator =
+                new JobPreparationCoordinator(store);
+
+        coordinator.prepare("existing-job", 1, NOW);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.prepare(
+                        "existing-job", 2, NOW.plusSeconds(1), "c".repeat(64)
+                )
+        );
+
+        assertNull(
+                store.getJob("existing-job").orElseThrow().manifestFingerprint()
+        );
+    }
+
+    @Test
     void rejectsInvalidManifestFingerprintBeforeCreatingJob() {
         InMemoryJobStateStore store = new InMemoryJobStateStore();
         JobPreparationCoordinator coordinator =
