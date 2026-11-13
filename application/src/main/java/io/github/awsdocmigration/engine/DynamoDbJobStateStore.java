@@ -27,6 +27,7 @@ import java.util.UUID;
 public final class DynamoDbJobStateStore implements JobStateStore {
 
     private static final int MAX_ERROR_LENGTH = 2_000;
+    public static final int MAX_SHARD_ATTEMPTS = 3;
 
     private final DynamoDbClient dynamoDb;
     private final String tableName;
@@ -303,13 +304,15 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     .updateExpression(
                             "SET #status = :running, #workerId = :worker, "
                                     + "#leaseToken = :token, #leaseExpiresAt = :expiresAt, "
-                                    + "#updatedAt = :now REMOVE #lastError"
+                                    + "#updatedAt = :now, #attemptCount = "
+                                    + "if_not_exists(#attemptCount, :zero) + :one "
+                                    + "REMOVE #lastError"
                     )
                     .conditionExpression(
-                            "(#status = :pending) OR "
-                                    + "(#status = :running AND "
-                                    + "(attribute_not_exists(#leaseExpiresAt) "
-                                    + "OR #leaseExpiresAt <= :now))"
+                            "((#status = :pending OR #status = :failed) "
+                                    + "AND (attribute_not_exists(#attemptCount) OR #attemptCount < :max)) "
+                                    + "OR (#status = :running AND #leaseExpiresAt <= :now "
+                                    + "AND (attribute_not_exists(#attemptCount) OR #attemptCount < :max))"
                     )
                     .expressionAttributeNames(Map.of(
                             "#status", "status",
@@ -317,15 +320,20 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                             "#leaseToken", "leaseToken",
                             "#leaseExpiresAt", "leaseExpiresAt",
                             "#updatedAt", "updatedAt",
-                            "#lastError", "lastError"
+                            "#lastError", "lastError",
+                            "#attemptCount", "attemptCount"
                     ))
                     .expressionAttributeValues(Map.of(
                             ":pending", s(MigrationShardStatus.PENDING.name()),
+                            ":failed", s(MigrationShardStatus.FAILED.name()),
                             ":running", s(MigrationShardStatus.RUNNING.name()),
                             ":worker", s(workerId),
                             ":token", s(leaseToken),
                             ":expiresAt", n(expiresAt),
-                            ":now", n(now.toEpochMilli())
+                            ":now", n(now.toEpochMilli()),
+                            ":zero", n(0),
+                            ":one", n(1),
+                            ":max", n(MAX_SHARD_ATTEMPTS)
                     ))
                     .build());
 
@@ -333,7 +341,45 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                     jobId, shardNumber, workerId, leaseToken, expiresAt
             ));
         } catch (ConditionalCheckFailedException notClaimable) {
+            markExpiredShardFailedIfAttemptsExhausted(jobId, shardNumber, now);
             return Optional.empty();
+        }
+    }
+
+    private void markExpiredShardFailedIfAttemptsExhausted(
+            String jobId, int shardNumber, Instant now
+    ) {
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(jobId, shardKey(shardNumber)))
+                    .updateExpression(
+                            "SET #status = :failed, #updatedAt = :now, #lastError = :error "
+                                    + "REMOVE #workerId, #leaseToken, #leaseExpiresAt"
+                    )
+                    .conditionExpression(
+                            "#status = :running AND #leaseExpiresAt <= :now "
+                                    + "AND #attemptCount >= :max"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#updatedAt", "updatedAt",
+                            "#lastError", "lastError",
+                            "#workerId", "workerId",
+                            "#leaseToken", "leaseToken",
+                            "#leaseExpiresAt", "leaseExpiresAt",
+                            "#attemptCount", "attemptCount"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":running", s(MigrationShardStatus.RUNNING.name()),
+                            ":failed", s(MigrationShardStatus.FAILED.name()),
+                            ":now", n(now.toEpochMilli()),
+                            ":max", n(MAX_SHARD_ATTEMPTS),
+                            ":error", s("Maximum shard attempts exhausted")
+                    ))
+                    .build());
+        } catch (ConditionalCheckFailedException stateChangedOrNotExhausted) {
+            // A concurrent claimant or state transition won; never overwrite it.
         }
     }
 
@@ -586,6 +632,7 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 MigrationShardStatus.valueOf(text(item, "status")),
                 nullableText(item, "workerId"),
                 nullableText(item, "lastError"),
+                integer(item, "attemptCount"),
                 number(item, "createdAt"),
                 number(item, "updatedAt")
         );

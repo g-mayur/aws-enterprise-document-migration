@@ -234,6 +234,69 @@ class DynamoDbJobStateStoreIntegrationTest {
     }
 
     @Test
+    void failedShardsCanBeRetriedOnlyUpToThreeTotalClaims() {
+        assertTrue(store.createJob("bounded-retry-job", 1, NOW));
+        assertTrue(store.transitionJob("bounded-retry-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("bounded-retry-job", 0, NOW.plusSeconds(2)));
+
+        ShardLease first = store.claimShard(
+                "bounded-retry-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(5)
+        ).orElseThrow();
+        assertEquals(1, store.getShard("bounded-retry-job", 0).orElseThrow().attemptCount());
+        assertTrue(store.transitionClaimedShard(
+                first, MigrationShardStatus.FAILED, NOW.plusSeconds(4), "first failure"
+        ));
+
+        ShardLease second = store.claimShard(
+                "bounded-retry-job", 0, "worker-b", NOW.plusSeconds(6), Duration.ofSeconds(5)
+        ).orElseThrow();
+        assertEquals(2, store.getShard("bounded-retry-job", 0).orElseThrow().attemptCount());
+        assertTrue(store.transitionClaimedShard(
+                second, MigrationShardStatus.FAILED, NOW.plusSeconds(7), "second failure"
+        ));
+
+        ShardLease third = store.claimShard(
+                "bounded-retry-job", 0, "worker-c", NOW.plusSeconds(8), Duration.ofSeconds(5)
+        ).orElseThrow();
+        assertEquals(3, store.getShard("bounded-retry-job", 0).orElseThrow().attemptCount());
+
+        assertTrue(store.claimShard(
+                "bounded-retry-job", 0, "worker-d", NOW.plusSeconds(13), Duration.ofSeconds(5)
+        ).isEmpty());
+
+        MigrationShardState exhausted = store.getShard("bounded-retry-job", 0).orElseThrow();
+        assertEquals(MigrationShardStatus.FAILED, exhausted.status());
+        assertEquals(3, exhausted.attemptCount());
+        assertEquals("Maximum shard attempts exhausted", exhausted.lastError());
+        assertFalse(store.transitionClaimedShard(
+                third, MigrationShardStatus.COMPLETED, NOW.plusSeconds(14), null
+        ));
+    }
+
+    @Test
+    void completedShardCannotBeClaimedAgain() {
+        assertTrue(store.createJob("completed-shard-job", 1, NOW));
+        assertTrue(store.transitionJob("completed-shard-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("completed-shard-job", 0, NOW.plusSeconds(2)));
+
+        ShardLease lease = store.claimShard(
+                "completed-shard-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(30)
+        ).orElseThrow();
+        assertTrue(store.transitionClaimedShard(
+                lease, MigrationShardStatus.COMPLETED, NOW.plusSeconds(4), null
+        ));
+
+        assertTrue(store.claimShard(
+                "completed-shard-job", 0, "worker-b", NOW.plusSeconds(40), Duration.ofSeconds(30)
+        ).isEmpty());
+        MigrationShardState completed = store.getShard("completed-shard-job", 0).orElseThrow();
+        assertEquals(MigrationShardStatus.COMPLETED, completed.status());
+        assertEquals(1, completed.attemptCount());
+    }
+
+    @Test
     void expiredLeaseCannotBeRenewedOrCompleted() {
         assertTrue(store.createJob("expired-job", 1, NOW));
         assertTrue(store.transitionJob("expired-job", MigrationJobStatus.CREATED,

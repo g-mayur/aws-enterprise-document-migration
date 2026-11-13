@@ -61,7 +61,7 @@ Requirements: Java 17+, Maven 3.9+, AWS CLI v2, an AWS account and an S3 destina
      --region us-east-1
    ```
 
-   For durable sharded execution, configure the separate document-state and job-state DynamoDB tables and use the `--job-state-table`, `--job-id`, `--total-shards` and `--shard-number` options described in [docs/quickstart.md](docs/quickstart.md). See [docs/implementation-status.md](docs/implementation-status.md) for current limitations.
+   For durable sharded execution, configure the separate document-state and job-state DynamoDB tables and use the `--job-state-table`, `--job-id`, `--total-shards` and `--shard-number` options described in [docs/quickstart.md](docs/quickstart.md). See [docs/implementation-status.md](docs/implementation-status.md) for current limitations. Shard claims are persisted with a limit of three total attempts (including the initial claim); failed shards can be reclaimed while attempts remain, and an expired final attempt becomes terminally failed. This does not automatically dispatch replacement ECS workers.
 
 ## Configure for your environment
 

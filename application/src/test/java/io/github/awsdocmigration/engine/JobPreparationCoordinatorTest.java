@@ -278,7 +278,7 @@ class JobPreparationCoordinatorTest {
             long timestamp = now.toEpochMilli();
             shards.put(key, new MigrationShardState(
                     jobId, shardNumber, MigrationShardStatus.PENDING,
-                    null, null, timestamp, timestamp
+                    null, null, 0, timestamp, timestamp
             ));
             return true;
         }
@@ -342,7 +342,8 @@ class JobPreparationCoordinatorTest {
             leases.put(key, lease);
             shards.put(key, new MigrationShardState(
                     jobId, shardNumber, MigrationShardStatus.RUNNING,
-                    workerId, null, current.createdAtEpochMillis(), now.toEpochMilli()
+                    workerId, null, current.attemptCount() + 1,
+                    current.createdAtEpochMillis(), now.toEpochMilli()
             ));
             return Optional.of(lease);
         }
@@ -395,7 +396,8 @@ class JobPreparationCoordinatorTest {
             leases.remove(key);
             shards.put(key, new MigrationShardState(
                     lease.jobId(), lease.shardNumber(), target, null,
-                    errorMessage, current.createdAtEpochMillis(), now.toEpochMilli()
+                    errorMessage, current.attemptCount(),
+                    current.createdAtEpochMillis(), now.toEpochMilli()
             ));
             return true;
         }
@@ -426,6 +428,7 @@ class JobPreparationCoordinatorTest {
                     target,
                     target == MigrationShardStatus.RUNNING ? workerId : null,
                     errorMessage,
+                    current.attemptCount(),
                     current.createdAtEpochMillis(),
                     now.toEpochMilli()
             ));
