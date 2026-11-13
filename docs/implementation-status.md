@@ -15,8 +15,9 @@ This document describes the current starter implementation. A successful build d
 | Version key resolution | Implemented (starter) | Explicit latest flag required for LATEST_ONLY |
 | SHA-256 | Implemented (starter) | Streams from file/input stream |
 | Downloaded-size verification | Implemented (starter) | CLI checks source bytes against manifest size |
-| S3 destination writer | Implemented (starter) | SSE-S3; synchronous single PUT |
-| Multipart/resumable upload | Not implemented | Required for objects above the single-PUT limit and resilient large transfers |
+| S3 destination writer | Implemented (starter) | SSE-S3; single PUT for small objects and sequential multipart upload for objects above 64 MiB |
+| Multipart upload | Implemented (starter) | Bounded heap usage; one part is spooled to local temporary disk at a time; failed multipart uploads are aborted |
+| Resumable upload | Not implemented | Upload state and completed parts are not persisted across process restarts |
 | Durable DynamoDB worker state/leases | Not implemented | Terraform tables are foundation only; application integration is pending |
 | Distributed orchestration | Not implemented | ECS worker deployment and job orchestration are pending |
 | Private API and notifications | Not implemented | Optional control-plane extensions |

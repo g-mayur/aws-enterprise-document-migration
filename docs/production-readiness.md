@@ -2,7 +2,8 @@
 
 - [ ] Connector tested against the actual source, including permissions, versions, deletions and throttling.
 - [ ] Manifest sharding and replay behavior tested; duplicate events are safe.
-- [ ] Multipart upload/resume implemented for large objects.
+- [x] Sequential multipart upload implemented for large objects; production integration and load validation remain required.
+- [ ] Multipart upload resume across worker/process restarts implemented.
 - [ ] Full-object SHA-256 semantics agreed with source; do not treat ETag as SHA-256.
 - [ ] Conditional DynamoDB claims, lease expiry, retry policy and dead-letter handling implemented.
 - [ ] Destination key collision and overwrite policy approved.

@@ -10,7 +10,7 @@ A source-agnostic, extensible boilerplate for migrating documents, metadata and 
 - Starter filesystem and Amazon S3 source connectors.
 - JSONL manifest contract and schema.
 - Deterministic destination-key strategy for `LATEST_ONLY` and `ALL_VERSIONS`.
-- Streaming SHA-256 utility and S3 destination writer using SSE-S3.
+- Streaming SHA-256 utility and S3 destination writer using SSE-S3, with bounded-memory sequential multipart uploads for large objects.
 - Terraform foundation for encrypted S3 buckets, DynamoDB state tables and ECS/Fargate execution primitives.
 - Docker build, GitHub Actions checks, operational documentation and examples.
 
@@ -33,7 +33,7 @@ Amazon S3 destination + DynamoDB state
 Optional orchestration extensions: EventBridge, Lambda, API Gateway, SNS, CloudWatch
 ```
 
-The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest.
+The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. Multipart resume across process restarts is not implemented.
 
 ## Quick start: local filesystem to S3
 
