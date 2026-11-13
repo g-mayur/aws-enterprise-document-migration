@@ -46,7 +46,7 @@ public final class JobPreparationCoordinator {
             );
         }
 
-        boolean created = stateStore.createJob(jobId, totalShards, now);
+        stateStore.createJob(jobId, totalShards, now);
         MigrationJobState job = stateStore.getJob(jobId)
                 .orElseThrow(() -> new IllegalStateException(
                         "Job does not exist after create attempt: " + jobId
@@ -75,16 +75,14 @@ public final class JobPreparationCoordinator {
                     null
             );
 
-            if (!transitioned) {
-                job = stateStore.getJob(jobId)
-                        .orElseThrow(() -> new IllegalStateException(
-                                "Job disappeared during preparation: " + jobId
-                        ));
-            } else {
-                job = stateStore.getJob(jobId)
-                        .orElseThrow(() -> new IllegalStateException(
-                                "Job disappeared after entering DISCOVERING: " + jobId
-                        ));
+            job = stateStore.getJob(jobId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Job disappeared during preparation: " + jobId
+                    ));
+
+            if (!transitioned && job.status() == MigrationJobStatus.READY) {
+                verifyRegisteredShards(jobId, totalShards);
+                return job;
             }
         }
 
