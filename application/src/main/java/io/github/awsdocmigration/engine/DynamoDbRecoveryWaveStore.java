@@ -97,7 +97,7 @@ public final class DynamoDbRecoveryWaveStore {
                                     + "#selectedShardDigest = :selectedShardDigest, "
                                     + "#executionName = :executionName, #state = :active, "
                                     + "#executionStatus = :unknown, #createdAt = :now, #updatedAt = :now "
-                                    + "REMOVE #executionArn"
+                                    + "REMOVE #executionArn, #stateMachineArn, #executionInputDigest"
                     )
                     .conditionExpression(
                             "attribute_not_exists(pk) OR "
@@ -116,7 +116,9 @@ public final class DynamoDbRecoveryWaveStore {
                             Map.entry("#executionStatus", "executionStatus"),
                             Map.entry("#createdAt", "createdAt"),
                             Map.entry("#updatedAt", "updatedAt"),
-                            Map.entry("#executionArn", "executionArn")
+                            Map.entry("#executionArn", "executionArn"),
+                            Map.entry("#stateMachineArn", "stateMachineArn"),
+                            Map.entry("#executionInputDigest", "executionInputDigest")
                     ))
                     .expressionAttributeValues(values)
                     .returnValues("ALL_NEW")
@@ -161,7 +163,8 @@ public final class DynamoDbRecoveryWaveStore {
                     .conditionExpression(
                             "#state = :active AND #generation = :generation "
                                     + "AND #ownerToken = :ownerToken AND #waveId = :waveId "
-                                    + "AND (attribute_not_exists(#stateMachineArn) OR "
+                                    + "AND ((attribute_not_exists(#stateMachineArn) AND "
+                                    + "attribute_not_exists(#executionInputDigest)) OR "
                                     + "(#stateMachineArn = :stateMachineArn "
                                     + "AND #executionInputDigest = :inputDigest))"
                     )
