@@ -45,6 +45,15 @@ data "aws_iam_policy_document" "worker_task" {
     resources = concat(["${aws_s3_bucket.staging.arn}/*"], local.worker_source_bucket_resources)
   }
 
+  dynamic "statement" {
+    for_each = var.source_bucket_arn == null ? [] : [var.source_bucket_arn]
+    content {
+      sid       = "ListSourceBucket"
+      actions   = ["s3:ListBucket"]
+      resources = [statement.value]
+    }
+  }
+
   statement {
     sid       = "WriteDestinationObjects"
     actions   = ["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
@@ -88,7 +97,6 @@ resource "aws_ecs_task_definition" "worker" {
     name      = "migration-worker"
     image     = var.worker_image
     essential = true
-    command   = ["--help"]
     environment = [
       { name = "AWS_REGION", value = var.aws_region }
     ]
@@ -203,6 +211,19 @@ resource "aws_sfn_state_machine" "migration" {
                     "Command.$" = "States.Array('--mode','migrate','--source-type','s3','--source-bucket',$.sourceBucket,'--source-prefix',$.sourcePrefix,'--destination-bucket',$.destinationBucket,'--manifest-s3-uri',$.manifestS3Uri,'--state-table','${aws_dynamodb_table.state.name}','--job-state-table','${aws_dynamodb_table.job_state.name}','--job-id',$.jobId,'--total-shards',States.Format('{}',$.totalShards),'--shard-number',States.Format('{}',$.shardNumber))"
                   }]
                 }
+              }
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.workerError"
+                Next        = "RecordShardFailure"
+              }]
+              End = true
+            }
+            RecordShardFailure = {
+              Type = "Pass"
+              Parameters = {
+                "shardNumber.$" = "$.shardNumber"
+                "error.$"       = "$.workerError"
               }
               End = true
             }
