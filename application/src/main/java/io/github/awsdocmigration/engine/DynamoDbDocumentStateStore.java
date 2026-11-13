@@ -130,6 +130,55 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
     }
 
     @Override
+    public boolean renewLease(
+            String jobId,
+            int shardNumber,
+            String documentId,
+            String versionId,
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    ) {
+        validateIdentity(jobId, shardNumber, documentId, versionId);
+        requireText(workerId, "workerId");
+        Objects.requireNonNull(now, "Current time is required");
+        Objects.requireNonNull(leaseDuration, "Lease duration is required");
+
+        long leaseDurationMillis = leaseDuration.toMillis();
+        if (leaseDurationMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "Lease duration must be at least one millisecond"
+            );
+        }
+
+        long nowMillis = now.toEpochMilli();
+        long leaseExpiry = Math.addExact(nowMillis, leaseDurationMillis);
+
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
+        values.put(":worker", string(workerId));
+        values.put(":now", number(nowMillis));
+        values.put(":leaseExpiry", number(leaseExpiry));
+
+        UpdateItemRequest request = UpdateItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId, shardNumber, documentId, versionId))
+                .updateExpression(
+                        "SET #leaseExpiresAt = :leaseExpiry, #updatedAt = :now"
+                )
+                .conditionExpression(
+                        "#status = :inProgress AND #leaseOwner = :worker "
+                                + "AND #leaseExpiresAt > :now"
+                )
+                .expressionAttributeNames(leaseAttributeNames())
+                .expressionAttributeValues(values)
+                .returnValues(ReturnValue.NONE)
+                .build();
+
+        return updateOnlyIfLeaseOwned(request);
+    }
+
+    @Override
     public boolean markCompleted(
             String jobId,
             int shardNumber,
@@ -292,6 +341,15 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         names.put("#updatedAt", "updatedAt");
         names.put("#documentId", "documentId");
         names.put("#versionId", "versionId");
+        return names;
+    }
+
+    private static Map<String, String> leaseAttributeNames() {
+        Map<String, String> names = new HashMap<>();
+        names.put("#status", "status");
+        names.put("#leaseOwner", "leaseOwner");
+        names.put("#leaseExpiresAt", "leaseExpiresAt");
+        names.put("#updatedAt", "updatedAt");
         return names;
     }
 

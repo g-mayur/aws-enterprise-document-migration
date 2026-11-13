@@ -23,6 +23,23 @@ public interface DocumentStateStore {
             int maximumAttempts
     );
 
+    /**
+     * Extends a worker's lease only while that worker still owns an
+     * unexpired IN_PROGRESS lease.
+     *
+     * @return true when the lease was extended; false when it was expired,
+     *         reclaimed, or owned by another worker
+     */
+    boolean renewLease(
+            String jobId,
+            int shardNumber,
+            String documentId,
+            String versionId,
+            String workerId,
+            Instant now,
+            Duration leaseDuration
+    );
+
     boolean markCompleted(
             String jobId,
             int shardNumber,
