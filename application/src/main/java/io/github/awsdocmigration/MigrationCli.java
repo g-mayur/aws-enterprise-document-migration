@@ -506,27 +506,28 @@ public final class MigrationCli {
                             maximumAttempts
                     );
 
-            ShardExecutionCoordinator.Result result = execution.execute(
-                    manifestPath,
-                    record -> migrateDocument(
-                            source,
-                            writer,
-                            keyResolver,
-                            record,
-                            policy
-                    )
-            );
+            ShardExecutionCoordinator.Result result;
+            try {
+                result = execution.execute(
+                        manifestPath,
+                        record -> migrateDocument(
+                                source,
+                                writer,
+                                keyResolver,
+                                record,
+                                policy
+                        )
+                );
+            } catch (Exception executionFailure) {
+                try {
+                    reportJobFinalization(jobStateStore, jobId);
+                } catch (Exception finalizationFailure) {
+                    executionFailure.addSuppressed(finalizationFailure);
+                }
+                throw executionFailure;
+            }
 
-            Optional<MigrationJobState> finalized =
-                    new JobFinalizationCoordinator(jobStateStore)
-                            .finalizeIfReady(jobId, Instant.now());
-
-            System.out.printf(
-                    "Job finalization status. job=%s status=%s%n",
-                    jobId,
-                    finalized.map(state -> state.status().name())
-                            .orElse("WAITING_FOR_SHARDS")
-            );
+            reportJobFinalization(jobStateStore, jobId);
 
             System.out.printf(
                     "Shard execution completed. job=%s shard=%d assigned=%d "
@@ -539,6 +540,22 @@ public final class MigrationCli {
                     workerId
             );
         }
+    }
+
+    private static void reportJobFinalization(
+            JobStateStore jobStateStore,
+            String jobId
+    ) {
+        Optional<MigrationJobState> finalized =
+                new JobFinalizationCoordinator(jobStateStore)
+                        .finalizeIfReady(jobId, Instant.now());
+
+        System.out.printf(
+                "Job finalization status. job=%s status=%s%n",
+                jobId,
+                finalized.map(state -> state.status().name())
+                        .orElse("WAITING_FOR_SHARDS")
+        );
     }
 
     /**
