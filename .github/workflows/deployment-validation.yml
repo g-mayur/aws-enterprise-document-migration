@@ -34,11 +34,17 @@ jobs:
       - name: Check Terraform formatting
         run: terraform -chdir=infrastructure fmt -check -diff -recursive
 
-      - name: Initialize providers without backend
+      - name: Initialize workload providers without backend
         run: terraform -chdir=infrastructure init -backend=false -input=false
 
-      - name: Validate Terraform configuration
+      - name: Validate workload configuration
         run: terraform -chdir=infrastructure validate -no-color
+
+      - name: Initialize bootstrap providers without backend
+        run: terraform -chdir=infrastructure/bootstrap init -backend=false -input=false
+
+      - name: Validate bootstrap configuration
+        run: terraform -chdir=infrastructure/bootstrap validate -no-color
 
   container:
     name: Build worker container
