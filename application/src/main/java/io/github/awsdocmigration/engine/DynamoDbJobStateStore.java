@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /** DynamoDB implementation of the durable migration job and shard lifecycle. */
 public final class DynamoDbJobStateStore implements JobStateStore {
@@ -278,6 +279,194 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 .forEach(item -> shards.add(toShardState(item)));
 
         return List.copyOf(shards);
+    }
+
+    @Override
+    public Optional<ShardLease> claimShard(
+            String jobId,
+            int shardNumber,
+            String workerId,
+            Instant now,
+            java.time.Duration leaseDuration
+    ) {
+        validateShard(jobId, shardNumber);
+        requireText(workerId, "workerId");
+        Objects.requireNonNull(now, "Claim time is required");
+
+        long expiresAt = leaseExpiry(now, leaseDuration);
+        String leaseToken = UUID.randomUUID().toString();
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(jobId, shardKey(shardNumber)))
+                    .updateExpression(
+                            "SET #status = :running, #workerId = :worker, "
+                                    + "#leaseToken = :token, #leaseExpiresAt = :expiresAt, "
+                                    + "#updatedAt = :now REMOVE #lastError"
+                    )
+                    .conditionExpression(
+                            "(#status = :pending) OR "
+                                    + "(#status = :running AND "
+                                    + "(attribute_not_exists(#leaseExpiresAt) "
+                                    + "OR #leaseExpiresAt <= :now))"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#workerId", "workerId",
+                            "#leaseToken", "leaseToken",
+                            "#leaseExpiresAt", "leaseExpiresAt",
+                            "#updatedAt", "updatedAt",
+                            "#lastError", "lastError"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":pending", s(MigrationShardStatus.PENDING.name()),
+                            ":running", s(MigrationShardStatus.RUNNING.name()),
+                            ":worker", s(workerId),
+                            ":token", s(leaseToken),
+                            ":expiresAt", n(expiresAt),
+                            ":now", n(now.toEpochMilli())
+                    ))
+                    .build());
+
+            return Optional.of(new ShardLease(
+                    jobId, shardNumber, workerId, leaseToken, expiresAt
+            ));
+        } catch (ConditionalCheckFailedException notClaimable) {
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public Optional<ShardLease> renewShardLease(
+            ShardLease lease,
+            Instant now,
+            java.time.Duration leaseDuration
+    ) {
+        validateLease(lease);
+        Objects.requireNonNull(now, "Renewal time is required");
+        long expiresAt = leaseExpiry(now, leaseDuration);
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(lease.jobId(), shardKey(lease.shardNumber())))
+                    .updateExpression(
+                            "SET #leaseExpiresAt = :expiresAt, #updatedAt = :now"
+                    )
+                    .conditionExpression(
+                            "#status = :running AND #workerId = :worker "
+                                    + "AND #leaseToken = :token "
+                                    + "AND #leaseExpiresAt > :now"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#workerId", "workerId",
+                            "#leaseToken", "leaseToken",
+                            "#leaseExpiresAt", "leaseExpiresAt",
+                            "#updatedAt", "updatedAt"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":running", s(MigrationShardStatus.RUNNING.name()),
+                            ":worker", s(lease.workerId()),
+                            ":token", s(lease.leaseToken()),
+                            ":expiresAt", n(expiresAt),
+                            ":now", n(now.toEpochMilli())
+                    ))
+                    .build());
+
+            return Optional.of(new ShardLease(
+                    lease.jobId(), lease.shardNumber(), lease.workerId(),
+                    lease.leaseToken(), expiresAt
+            ));
+        } catch (ConditionalCheckFailedException lostOwnership) {
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public boolean transitionClaimedShard(
+            ShardLease lease,
+            MigrationShardStatus target,
+            Instant now,
+            String errorMessage
+    ) {
+        validateLease(lease);
+        Objects.requireNonNull(target, "Target shard status is required");
+        Objects.requireNonNull(now, "Transition time is required");
+
+        if (target != MigrationShardStatus.COMPLETED
+                && target != MigrationShardStatus.FAILED) {
+            throw new IllegalArgumentException(
+                    "A claimed shard can only transition to COMPLETED or FAILED"
+            );
+        }
+
+        Map<String, AttributeValue> names = new HashMap<>();
+        names.put("#status", "status");
+        names.put("#workerId", "workerId");
+        names.put("#leaseToken", "leaseToken");
+        names.put("#leaseExpiresAt", "leaseExpiresAt");
+        names.put("#updatedAt", "updatedAt");
+        names.put("#lastError", "lastError");
+
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":running", s(MigrationShardStatus.RUNNING.name()));
+        values.put(":target", s(target.name()));
+        values.put(":worker", s(lease.workerId()));
+        values.put(":token", s(lease.leaseToken()));
+        values.put(":now", n(now.toEpochMilli()));
+
+        String update = "SET #status = :target, #updatedAt = :now "
+                + "REMOVE #workerId, #leaseToken, #leaseExpiresAt";
+
+        if (target == MigrationShardStatus.FAILED && hasText(errorMessage)) {
+            values.put(":error", s(safeError(errorMessage)));
+            update = "SET #status = :target, #updatedAt = :now, #lastError = :error "
+                    + "REMOVE #workerId, #leaseToken, #leaseExpiresAt";
+        } else {
+            update += ", #lastError";
+        }
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(lease.jobId(), shardKey(lease.shardNumber())))
+                    .updateExpression(update)
+                    .conditionExpression(
+                            "#status = :running AND #workerId = :worker "
+                                    + "AND #leaseToken = :token "
+                                    + "AND #leaseExpiresAt > :now"
+                    )
+                    .expressionAttributeNames(names)
+                    .expressionAttributeValues(values)
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException lostOwnership) {
+            return false;
+        }
+    }
+
+    private static long leaseExpiry(
+            Instant now,
+            java.time.Duration leaseDuration
+    ) {
+        Objects.requireNonNull(leaseDuration, "Lease duration is required");
+        if (leaseDuration.isZero() || leaseDuration.isNegative()) {
+            throw new IllegalArgumentException("Lease duration must be positive");
+        }
+        try {
+            return Math.addExact(now.toEpochMilli(), leaseDuration.toMillis());
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException("Lease expiry is outside the supported range", overflow);
+        }
+    }
+
+    private static void validateLease(ShardLease lease) {
+        Objects.requireNonNull(lease, "Shard lease is required");
+        validateShard(lease.jobId(), lease.shardNumber());
+        requireText(lease.workerId(), "workerId");
+        requireText(lease.leaseToken(), "leaseToken");
     }
 
     @Override
