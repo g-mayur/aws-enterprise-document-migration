@@ -89,8 +89,43 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 integer(item, "totalShards"),
                 nullableText(item, "lastError"),
                 number(item, "createdAt"),
-                number(item, "updatedAt")
+                number(item, "updatedAt"),
+                nullableText(item, "manifestFingerprint")
         ));
+    }
+
+    @Override
+    public boolean bindManifestFingerprint(String jobId, String fingerprint) {
+        requireText(jobId, "jobId");
+        requireSha256(fingerprint);
+
+        String canonicalFingerprint = fingerprint.toLowerCase(java.util.Locale.ROOT);
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(jobId, "JOB"))
+                    .updateExpression("SET #manifestFingerprint = :fingerprint")
+                    .conditionExpression(
+                            "attribute_exists(pk) AND "
+                                    + "(#manifestFingerprint = :fingerprint OR "
+                                    + "(attribute_not_exists(#manifestFingerprint) AND "
+                                    + "(#status = :created OR #status = :discovering)))"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#manifestFingerprint", "manifestFingerprint",
+                            "#status", "status"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":fingerprint", s(canonicalFingerprint),
+                            ":created", s(MigrationJobStatus.CREATED.name()),
+                            ":discovering", s(MigrationJobStatus.DISCOVERING.name())
+                    ))
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException conflictOrMissingJob) {
+            return false;
+        }
     }
 
     @Override
@@ -397,6 +432,14 @@ public final class DynamoDbJobStateStore implements JobStateStore {
     private static long number(Map<String, AttributeValue> item, String name) {
         AttributeValue value = item.get(name);
         return value == null || value.n() == null ? 0L : Long.parseLong(value.n());
+    }
+
+    private static void requireSha256(String fingerprint) {
+        if (fingerprint == null || !fingerprint.matches("[A-Fa-f0-9]{64}")) {
+            throw new IllegalArgumentException(
+                    "manifest fingerprint must contain exactly 64 hexadecimal characters"
+            );
+        }
     }
 
     private static String safeError(String error) {

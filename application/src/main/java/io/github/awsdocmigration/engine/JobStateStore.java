@@ -19,6 +19,16 @@ public interface JobStateStore {
 
     Optional<MigrationJobState> getJob(String jobId);
 
+    /**
+     * Binds a SHA-256 manifest fingerprint to a job.
+     *
+     * The first fingerprint is persisted. Repeating the same fingerprint
+     * succeeds; attempting to bind a different fingerprint fails.
+     * Returns false when the job does not exist or has a different fingerprint.
+     */
+    boolean bindManifestFingerprint(String jobId, String fingerprint);
+
+
     boolean transitionJob(
             String jobId,
             MigrationJobStatus expected,

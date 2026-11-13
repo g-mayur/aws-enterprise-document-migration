@@ -98,6 +98,37 @@ class DynamoDbJobStateStoreIntegrationTest {
     }
 
     @Test
+    void manifestFingerprintIsImmutableAndPersistsAcrossReads() {
+        String original = "A".repeat(64);
+        String conflicting = "b".repeat(64);
+
+        assertTrue(store.createJob("fingerprint-job", 0, NOW));
+        assertTrue(store.bindManifestFingerprint("fingerprint-job", original));
+        assertTrue(store.bindManifestFingerprint("fingerprint-job", original.toLowerCase()));
+        assertTrue(store.transitionJob("fingerprint-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.transitionJob("fingerprint-job", MigrationJobStatus.DISCOVERING,
+                MigrationJobStatus.READY, NOW.plusSeconds(2), null));
+
+        assertTrue(store.bindManifestFingerprint("fingerprint-job", original));
+        assertFalse(store.bindManifestFingerprint("fingerprint-job", conflicting));
+        assertFalse(store.bindManifestFingerprint("missing-job", original));
+
+        MigrationJobState job = store.getJob("fingerprint-job").orElseThrow();
+        assertEquals(original.toLowerCase(), job.manifestFingerprint());
+    }
+
+    @Test
+    void manifestFingerprintRejectsInvalidSha256Values() {
+        assertTrue(store.createJob("invalid-fingerprint-job", 0, NOW));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> store.bindManifestFingerprint(
+                        "invalid-fingerprint-job", "not-a-sha256"
+                ));
+    }
+
+    @Test
     void shardCreationRequiresDiscoveringJobAndIsIdempotentlyRejected() {
         assertTrue(store.createJob("job-2", 2, NOW));
         assertFalse(store.createShard("job-2", 0, NOW));
