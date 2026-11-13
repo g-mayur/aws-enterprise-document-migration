@@ -27,7 +27,7 @@ import java.util.UUID;
 public final class DynamoDbJobStateStore implements JobStateStore {
 
     private static final int MAX_ERROR_LENGTH = 2_000;
-    public static final int MAX_SHARD_ATTEMPTS = 3;
+    public static final int MAX_SHARD_ATTEMPTS = JobStateStore.MAX_SHARD_ATTEMPTS;
 
     private final DynamoDbClient dynamoDb;
     private final String tableName;
@@ -159,10 +159,10 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         }
 
         String update = "SET #status = :target, #updatedAt = :now";
-        if (target == MigrationJobStatus.FAILED && hasText(errorMessage)) {
+        if ((target == MigrationJobStatus.FAILED\n                || target == MigrationJobStatus.COMPLETED_WITH_ERRORS)\n                && hasText(errorMessage)) {
             values.put(":error", s(safeError(errorMessage)));
             update += ", #lastError = :error";
-        } else if (target != MigrationJobStatus.FAILED) {
+        } else if (target != MigrationJobStatus.FAILED\n                && target != MigrationJobStatus.COMPLETED_WITH_ERRORS) {
             update += " REMOVE #lastError";
         }
 
