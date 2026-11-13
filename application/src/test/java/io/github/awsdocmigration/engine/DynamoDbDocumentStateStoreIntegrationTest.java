@@ -226,6 +226,16 @@ class DynamoDbDocumentStateStoreIntegrationTest {
                 reclaimedAt.plusSeconds(2)
         ));
 
+        dynamoDb.close();
+        dynamoDb = DynamoDbClient.builder()
+                .endpointOverride(URI.create(System.getenv("DYNAMODB_LOCAL_ENDPOINT")))
+                .region(Region.US_EAST_1)
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create("local", "local")
+                ))
+                .build();
+        store = new DynamoDbDocumentStateStore(dynamoDb, tableName);
+
         DocumentMigrationState persisted = store.get(
                 "job-integration",
                 0,
@@ -235,7 +245,6 @@ class DynamoDbDocumentStateStoreIntegrationTest {
         ).orElseThrow();
 
         assertEquals(DocumentMigrationStatus.COMPLETED, persisted.status());
-        assertEquals("worker-independent", "worker-independent");
         assertEquals("documents/document-integration.pdf", persisted.destinationKey());
         assertEquals(checksum, persisted.checksum());
         assertNull(persisted.leaseOwner());
