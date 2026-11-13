@@ -16,7 +16,6 @@ import java.util.Optional;
 public interface JobStateStore {
 
     int MAX_SHARD_ATTEMPTS = 3;
-\n    int MAX_SHARD_ATTEMPTS = 3;
 
     boolean createJob(String jobId, int totalShards, Instant now);
 
