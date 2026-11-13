@@ -35,15 +35,11 @@ public final class MigrationCli {
         Map<String, String> arguments = parse(args);
 
         String mode = arguments.getOrDefault("mode", "migrate");
-
         String sourceType = required(arguments, "source-type");
 
         String region = arguments.getOrDefault(
                 "region",
-                System.getenv().getOrDefault(
-                        "AWS_REGION",
-                        "us-east-1"
-                )
+                System.getenv().getOrDefault("AWS_REGION", "us-east-1")
         );
 
         try (S3Client s3 = S3Client.builder()
@@ -63,11 +59,7 @@ public final class MigrationCli {
                         Path.of(required(arguments, "manifest-output"))
                 );
 
-                case "migrate" -> migrate(
-                        source,
-                        s3,
-                        arguments
-                );
+                case "migrate" -> migrate(source, s3, arguments);
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
@@ -78,15 +70,29 @@ public final class MigrationCli {
     }
 
     /**
-     * Discovers source documents and writes their records to a JSONL manifest.
+     * Discovers source documents and writes them incrementally
+     * to a new JSONL manifest.
      *
-     * A failed discovery or write removes the incomplete manifest.
-     * Existing manifest files are never overwritten.
+     * Existing manifests are never overwritten.
+     * If discovery or writing fails, the incomplete manifest
+     * created by this operation is deleted.
      */
-    private static void generateManifest(
+    static void generateManifest(
             DocumentSource source,
             Path manifestPath
     ) throws Exception {
+
+        if (source == null) {
+            throw new IllegalArgumentException(
+                    "Document source is required"
+            );
+        }
+
+        if (manifestPath == null) {
+            throw new IllegalArgumentException(
+                    "Manifest output path is required"
+            );
+        }
 
         long discovered = 0;
 
@@ -95,37 +101,42 @@ public final class MigrationCli {
             source.validateConnection();
 
             /*
-             * ManifestWriter uses CREATE_NEW.
-             * It refuses to overwrite an existing manifest.
+             * CREATE_NEW prevents accidental replacement
+             * of an existing manifest.
              */
-            ManifestWriter writer = new ManifestWriter(manifestPath);
+            try (ManifestWriter writer = new ManifestWriter(manifestPath)) {
 
-            try (writer) {
-
-                Iterator<DocumentRecord> records = source.discover();
-
-                while (records.hasNext()) {
-
-                    DocumentRecord record = records.next();
-
-                    writer.write(record);
-
-                    discovered++;
-                }
-
-            } catch (Exception e) {
-
-                /*
-                 * The manifest was created by this run.
-                 * Remove it because discovery or writing failed.
-                 */
                 try {
-                    Files.deleteIfExists(manifestPath);
-                } catch (IOException cleanupError) {
-                    e.addSuppressed(cleanupError);
-                }
+                    Iterator<DocumentRecord> records = source.discover();
 
-                throw e;
+                    if (records == null) {
+                        throw new IllegalStateException(
+                                "Source discovery returned a null iterator"
+                        );
+                    }
+
+                    while (records.hasNext()) {
+
+                        DocumentRecord record = records.next();
+
+                        writer.write(record);
+
+                        discovered++;
+                    }
+
+                } catch (Exception e) {
+
+                    /*
+                     * Close the writer before deleting the file.
+                     */
+                    try {
+                        Files.deleteIfExists(manifestPath);
+                    } catch (IOException cleanupError) {
+                        e.addSuppressed(cleanupError);
+                    }
+
+                    throw e;
+                }
             }
         }
 
@@ -149,10 +160,7 @@ public final class MigrationCli {
                 required(arguments, "destination-bucket");
 
         VersionPolicy policy = VersionPolicy.valueOf(
-                arguments.getOrDefault(
-                        "version-policy",
-                        "ALL_VERSIONS"
-                )
+                arguments.getOrDefault("version-policy", "ALL_VERSIONS")
         );
 
         Path manifestPath = Path.of(
@@ -171,10 +179,7 @@ public final class MigrationCli {
             source.validateConnection();
 
             DestinationWriter writer =
-                    new S3DestinationWriter(
-                            s3,
-                            destinationBucket
-                    );
+                    new S3DestinationWriter(s3, destinationBucket);
 
             DestinationKeyResolver keyResolver =
                     new DestinationKeyResolver();
@@ -214,7 +219,6 @@ public final class MigrationCli {
         );
 
         if (failed > 0) {
-
             throw new IllegalStateException(
                     "Migration completed with "
                             + failed
@@ -235,18 +239,13 @@ public final class MigrationCli {
         return switch (sourceType) {
 
             case "filesystem" -> new FilesystemSource(
-                    Path.of(
-                            required(arguments, "source-root")
-                    )
+                    Path.of(required(arguments, "source-root"))
             );
 
             case "s3" -> new S3Source(
                     s3,
                     required(arguments, "source-bucket"),
-                    arguments.getOrDefault(
-                            "source-prefix",
-                            ""
-                    )
+                    arguments.getOrDefault("source-prefix", "")
             );
 
             default -> throw new IllegalArgumentException(
@@ -289,8 +288,7 @@ public final class MigrationCli {
                 digest = Checksums.sha256(verificationStream);
             }
 
-            String expectedChecksum =
-                    record.expectedSha256();
+            String expectedChecksum = record.expectedSha256();
 
             if (expectedChecksum != null
                     && !expectedChecksum.equalsIgnoreCase(digest)) {
@@ -301,10 +299,7 @@ public final class MigrationCli {
                 );
             }
 
-            String destinationKey = keyResolver.resolve(
-                    record,
-                    policy
-            );
+            String destinationKey = keyResolver.resolve(record, policy);
 
             try (InputStream uploadStream =
                          Files.newInputStream(temporaryFile)) {
@@ -346,7 +341,6 @@ public final class MigrationCli {
             String key = args[i].substring(2);
 
             if (arguments.containsKey(key)) {
-
                 throw new IllegalArgumentException(
                         "Duplicate argument: --" + key
                 );
@@ -369,7 +363,6 @@ public final class MigrationCli {
         String value = arguments.get(key);
 
         if (value == null || value.isBlank()) {
-
             throw new IllegalArgumentException(
                     "Missing --" + key
             );
