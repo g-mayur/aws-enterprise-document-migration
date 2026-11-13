@@ -242,6 +242,15 @@ resource "aws_sfn_state_machine" "migration" {
                   }]
                 }
               }
+              # Retry only RunTask API rejections. These occur before a worker
+              # can claim its DynamoDB shard; do not retry worker/application
+              # failures because the shard lease may still be active.
+              Retry = [{
+                ErrorEquals    = ["AmazonECS.Unknown"]
+                IntervalSeconds = 10
+                MaxAttempts     = 2
+                BackoffRate     = 2.0
+              }]
               End = true
             }
           }
