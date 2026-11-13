@@ -4,6 +4,7 @@ package io.github.awsdocmigration.engine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.domain.VersionIdentityType;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -20,11 +21,13 @@ import java.util.Set;
  * The reader is single-use. Call close() when processing finishes or stops
  * early. Blank lines and lines beginning with # are ignored.
  */
-public final class ManifestReader implements Iterable<DocumentRecord>, AutoCloseable {
+public final class ManifestReader
+        implements Iterable<DocumentRecord>, AutoCloseable {
 
     private static final Set<String> ALLOWED_FIELDS = Set.of(
             "documentId",
             "versionId",
+            "versionIdentityType",
             "fileName",
             "relativePath",
             "sizeBytes",
@@ -42,8 +45,11 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
 
     public ManifestReader(Path path) {
         if (path == null) {
-            throw new IllegalArgumentException("Manifest path is required");
+            throw new IllegalArgumentException(
+                    "Manifest path is required"
+            );
         }
+
         this.path = path;
     }
 
@@ -61,21 +67,29 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
             reader = Files.newBufferedReader(path);
             return new ManifestIterator();
         } catch (IOException e) {
+            closeQuietly();
+
             throw new UncheckedIOException(
-                    "Unable to open manifest: " + path, e
+                    "Unable to open manifest: " + path,
+                    e
             );
         }
     }
 
-    private final class ManifestIterator implements Iterator<DocumentRecord> {
+    private final class ManifestIterator
+            implements Iterator<DocumentRecord> {
 
         private String nextLine;
         private long nextLineNumber;
+        private boolean advanceRequired;
 
         private ManifestIterator() {
             advance();
         }
 
+        /**
+         * Reads the next non-empty, non-comment line.
+         */
         private void advance() {
             try {
                 String line;
@@ -83,8 +97,8 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
                 while ((line = reader.readLine()) != null) {
                     lineNumber++;
 
-                    if (line.isBlank() ||
-                            line.stripLeading().startsWith("#")) {
+                    if (line.isBlank()
+                            || line.stripLeading().startsWith("#")) {
                         continue;
                     }
 
@@ -97,16 +111,24 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
                 close();
 
             } catch (IOException e) {
+                nextLine = null;
                 closeQuietly();
+
                 throw new UncheckedIOException(
-                        "Error reading manifest near line " +
-                                (lineNumber + 1), e
+                        "Error reading manifest near line "
+                                + (lineNumber + 1),
+                        e
                 );
             }
         }
 
         @Override
         public boolean hasNext() {
+            if (advanceRequired) {
+                advanceRequired = false;
+                advance();
+            }
+
             return nextLine != null;
         }
 
@@ -133,21 +155,28 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
                 DocumentRecord record =
                         mapper.treeToValue(node, DocumentRecord.class);
 
-                advance();
+                nextLine = null;
+                advanceRequired = true;
+
                 return record;
 
             } catch (Exception e) {
                 closeQuietly();
 
                 throw new IllegalArgumentException(
-                        "Invalid manifest record at line " +
-                                currentLineNumber + ": " + e.getMessage(),
+                        "Invalid manifest record at line "
+                                + currentLineNumber
+                                + ": "
+                                + e.getMessage(),
                         e
                 );
             }
         }
     }
 
+    /**
+     * Validates all manifest fields before creating a document record.
+     */
     private void validateRecord(JsonNode node) {
 
         node.fieldNames().forEachRemaining(field -> {
@@ -163,10 +192,15 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
         requireText(node, "fileName");
         requireText(node, "relativePath");
 
+        validateVersionIdentityType(node);
+
         JsonNode size = node.get("sizeBytes");
 
-        if (size == null || !size.isIntegralNumber()
-                || !size.canConvertToLong() || size.longValue() < 0) {
+        if (size == null
+                || !size.isIntegralNumber()
+                || !size.canConvertToLong()
+                || size.longValue() < 0) {
+
             throw new IllegalArgumentException(
                     "sizeBytes must be a non-negative integer"
             );
@@ -182,8 +216,10 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
 
         JsonNode checksum = node.get("expectedSha256");
 
-        if (checksum != null && !checksum.isNull()
+        if (checksum != null
+                && !checksum.isNull()
                 && !checksum.isTextual()) {
+
             throw new IllegalArgumentException(
                     "expectedSha256 must be a string or null"
             );
@@ -192,6 +228,7 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
         JsonNode metadata = node.get("metadata");
 
         if (metadata != null && !metadata.isNull()) {
+
             if (!metadata.isObject()) {
                 throw new IllegalArgumentException(
                         "metadata must be a JSON object"
@@ -201,21 +238,62 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
             metadata.fields().forEachRemaining(entry -> {
                 if (!entry.getValue().isTextual()) {
                     throw new IllegalArgumentException(
-                            "metadata values must be strings: " +
-                                    entry.getKey()
+                            "metadata values must be strings: "
+                                    + entry.getKey()
                     );
                 }
             });
         }
     }
 
+    /**
+     * Validates the optional version identity field.
+     *
+     * Older manifests without this field remain supported.
+     * Their identity defaults to LEGACY_UNSPECIFIED.
+     */
+    private void validateVersionIdentityType(JsonNode node) {
+
+        JsonNode identityType = node.get("versionIdentityType");
+
+        if (identityType == null) {
+            return;
+        }
+
+        if (!identityType.isTextual()
+                || identityType.asText().isBlank()) {
+
+            throw new IllegalArgumentException(
+                    "versionIdentityType must be a non-blank string"
+            );
+        }
+
+        try {
+            VersionIdentityType.valueOf(identityType.asText());
+
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "Unsupported versionIdentityType: "
+                            + identityType.asText()
+                            + ". Supported values are: "
+                            + java.util.Arrays.toString(
+                                    VersionIdentityType.values()
+                            ),
+                    e
+            );
+        }
+    }
+
     private void requireText(JsonNode node, String field) {
         JsonNode value = node.get(field);
 
-        if (value == null || !value.isTextual()
+        if (value == null
+                || !value.isTextual()
                 || value.asText().isBlank()) {
+
             throw new IllegalArgumentException(
-                    field + " is required and must be a non-blank string"
+                    field
+                            + " is required and must be a non-blank string"
             );
         }
     }
@@ -223,8 +301,9 @@ public final class ManifestReader implements Iterable<DocumentRecord>, AutoClose
     @Override
     public void close() throws IOException {
         if (reader != null) {
-            reader.close();
+            BufferedReader currentReader = reader;
             reader = null;
+            currentReader.close();
         }
     }
 
