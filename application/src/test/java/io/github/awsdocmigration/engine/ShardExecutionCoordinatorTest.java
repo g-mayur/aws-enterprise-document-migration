@@ -87,6 +87,18 @@ class ShardExecutionCoordinatorTest {
         );
     }
 
+    private DocumentRecord recordForShard(String prefix, int shardNumber) {
+        for (int index = 0; index < 10_000; index++) {
+            DocumentRecord candidate = record(prefix + "-" + index);
+            if (ShardAssignment.shardFor(candidate, 2) == shardNumber) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException(
+                "Unable to find a test document for shard " + shardNumber
+        );
+    }
+
     private Path manifest(DocumentRecord... records) throws Exception {
         Path path = temporaryDirectory.resolve("manifest-" + System.nanoTime() + ".jsonl");
         try (ManifestWriter writer = new ManifestWriter(path)) {
@@ -157,7 +169,7 @@ class ShardExecutionCoordinatorTest {
 
     @Test
     void countsAlreadyCompletedDocumentsWithoutMigratingAgain() throws Exception {
-        DocumentRecord document = record("already-done");
+        DocumentRecord document = recordForShard("already-done", 0);
 
         when(documentStore.claim(
                 anyString(), anyInt(), anyString(), anyString(),
@@ -201,7 +213,7 @@ class ShardExecutionCoordinatorTest {
 
     @Test
     void failsShardWhenDocumentCannotBeClaimedAndIsNotCompleted() throws Exception {
-        DocumentRecord document = record("not-claimable");
+        DocumentRecord document = recordForShard("not-claimable", 0);
 
         when(documentStore.claim(
                 anyString(), anyInt(), anyString(), anyString(),
