@@ -100,12 +100,21 @@ aws stepfunctions start-execution \
     "destinationBucket": "YOUR_DESTINATION_BUCKET",
     "manifestS3Uri": "s3://YOUR_STAGING_BUCKET/manifests/YOUR_UNIQUE_TEST_JOB_ID.jsonl",
     "totalShards": 2,
-    "shards": [0, 1]
+    "shards": [
+      {
+        "shardNumber": 0,
+        "command": ["--mode", "migrate", "--source-type", "s3", "--source-bucket", "YOUR_SOURCE_BUCKET", "--source-prefix", "YOUR_TEST_SOURCE_PREFIX", "--destination-bucket", "YOUR_DESTINATION_BUCKET", "--manifest-s3-uri", "s3://YOUR_STAGING_BUCKET/manifests/YOUR_UNIQUE_TEST_JOB_ID.jsonl", "--state-table", "YOUR_DOCUMENT_STATE_TABLE", "--job-state-table", "YOUR_JOB_STATE_TABLE", "--job-id", "YOUR_UNIQUE_TEST_JOB_ID", "--total-shards", "2", "--shard-number", "0"]
+      },
+      {
+        "shardNumber": 1,
+        "command": ["--mode", "migrate", "--source-type", "s3", "--source-bucket", "YOUR_SOURCE_BUCKET", "--source-prefix", "YOUR_TEST_SOURCE_PREFIX", "--destination-bucket", "YOUR_DESTINATION_BUCKET", "--manifest-s3-uri", "s3://YOUR_STAGING_BUCKET/manifests/YOUR_UNIQUE_TEST_JOB_ID.jsonl", "--state-table", "YOUR_DOCUMENT_STATE_TABLE", "--job-state-table", "YOUR_JOB_STATE_TABLE", "--job-id", "YOUR_UNIQUE_TEST_JOB_ID", "--total-shards", "2", "--shard-number", "1"]
+      }
+    ]
   }' \
   --region "$AWS_REGION"
 ```
 
-Use the exact same job ID, total shard count, and manifest that were prepared above. Do not start a second execution for the same test job while the first is running.
+Use the exact same job ID, total shard count, and manifest that were prepared above. Each shard entry must carry a complete CLI argument array; replace all example values and table names with the deployed values. Do not start a second execution for the same test job while the first is running.
 
 ## 6. Verify and record the pilot
 
