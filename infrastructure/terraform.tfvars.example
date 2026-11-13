@@ -2,3 +2,14 @@ aws_region = "us-east-1"
 project_name = "document-migration-dev"
 staging_bucket_name = "replace-with-globally-unique-staging-bucket"
 destination_bucket_name = "replace-with-globally-unique-destination-bucket"
+
+# ECS / Step Functions orchestration prerequisites
+worker_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/document-migration-worker:replace-with-immutable-tag"
+worker_subnet_ids = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
+worker_security_group_ids = ["sg-0123456789abcdef0"]
+source_bucket_arn = "arn:aws:s3:::replace-with-source-bucket"
+assign_public_ip = false
+worker_cpu = 1024
+worker_memory = 2048
+max_concurrent_shards = 10
+worker_log_retention_days = 30
