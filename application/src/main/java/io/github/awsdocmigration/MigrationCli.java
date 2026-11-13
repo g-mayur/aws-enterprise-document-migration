@@ -9,6 +9,11 @@ import io.github.awsdocmigration.engine.DestinationKeyResolver;
 import io.github.awsdocmigration.engine.DocumentMigrationCoordinator;
 import io.github.awsdocmigration.engine.DocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
+import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
+import io.github.awsdocmigration.engine.JobPreparationCoordinator;
+import io.github.awsdocmigration.engine.JobStateStore;
+import io.github.awsdocmigration.engine.ManifestFingerprint;
+import io.github.awsdocmigration.engine.ShardExecutionCoordinator;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -25,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -161,6 +167,18 @@ public final class MigrationCli {
             DynamoDbClient dynamoDb,
             Map<String, String> arguments
     ) throws Exception {
+
+        validateShardedExecutionArguments(arguments);
+
+        if (hasText(arguments.get("job-state-table"))) {
+            migrateSharded(
+                    source,
+                    s3,
+                    dynamoDb,
+                    arguments
+            );
+            return;
+        }
 
         String destinationBucket = required(arguments, "destination-bucket");
 
@@ -304,6 +322,168 @@ public final class MigrationCli {
                             + " failed document(s)"
             );
         }
+    }
+
+    /**
+     * Executes one shard of a prepared, fingerprint-bound migration job.
+     *
+     * The job/shard lifecycle table and document lease table are separate,
+     * matching the Terraform reference architecture.
+     */
+    private static void migrateSharded(
+            DocumentSource source,
+            S3Client s3,
+            DynamoDbClient dynamoDb,
+            Map<String, String> arguments
+    ) throws Exception {
+
+        String destinationBucket = required(arguments, "destination-bucket");
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        String documentStateTable = required(arguments, "state-table");
+        Path manifestPath = Path.of(required(arguments, "manifest"));
+
+        int totalShards = parsePositiveInt(
+                required(arguments, "total-shards"),
+                "total-shards"
+        );
+        int shardNumber = parseNonNegativeInt(
+                required(arguments, "shard-number"),
+                "shard-number"
+        );
+        if (shardNumber >= totalShards) {
+            throw new IllegalArgumentException(
+                    "--shard-number must be less than --total-shards"
+            );
+        }
+
+        int leaseSeconds = parsePositiveInt(
+                arguments.getOrDefault("lease-seconds", "300"),
+                "lease-seconds"
+        );
+        if (leaseSeconds < 3) {
+            throw new IllegalArgumentException(
+                    "--lease-seconds must be at least 3 for shard lease renewal"
+            );
+        }
+
+        int maximumAttempts = parsePositiveInt(
+                arguments.getOrDefault("max-attempts", "5"),
+                "max-attempts"
+        );
+        String workerId = arguments.getOrDefault(
+                "worker-id",
+                "worker-" + UUID.randomUUID()
+        );
+        if (workerId.isBlank()) {
+            throw new IllegalArgumentException("--worker-id cannot be blank");
+        }
+
+        VersionPolicy policy = VersionPolicy.valueOf(
+                arguments.getOrDefault("version-policy", "ALL_VERSIONS")
+        );
+
+        try (source) {
+            source.validateConnection();
+
+            String fingerprint = ManifestFingerprint.calculate(manifestPath);
+
+            JobStateStore jobStateStore =
+                    new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+            DocumentStateStore documentStateStore =
+                    new DynamoDbDocumentStateStore(dynamoDb, documentStateTable);
+
+            JobPreparationCoordinator preparation =
+                    new JobPreparationCoordinator(jobStateStore);
+
+            preparation.prepare(
+                    jobId,
+                    totalShards,
+                    Instant.now(),
+                    fingerprint
+            );
+
+            DestinationWriter writer =
+                    new S3DestinationWriter(s3, destinationBucket);
+            DestinationKeyResolver keyResolver =
+                    new DestinationKeyResolver();
+
+            ShardExecutionCoordinator execution =
+                    new ShardExecutionCoordinator(
+                            jobStateStore,
+                            documentStateStore,
+                            jobId,
+                            shardNumber,
+                            workerId,
+                            Duration.ofSeconds(leaseSeconds),
+                            Duration.ofSeconds(leaseSeconds),
+                            maximumAttempts
+                    );
+
+            ShardExecutionCoordinator.Result result = execution.execute(
+                    manifestPath,
+                    record -> migrateDocument(
+                            source,
+                            writer,
+                            keyResolver,
+                            record,
+                            policy
+                    )
+            );
+
+            System.out.printf(
+                    "Shard execution completed. job=%s shard=%d assigned=%d "
+                            + "migrated=%d alreadyCompleted=%d worker=%s%n",
+                    jobId,
+                    result.shardNumber(),
+                    result.assigned(),
+                    result.migrated(),
+                    result.alreadyCompleted(),
+                    workerId
+            );
+        }
+    }
+
+    /**
+     * Validates the opt-in sharded CLI configuration without changing the
+     * existing stateless and document-state-only command forms.
+     */
+    static void validateShardedExecutionArguments(
+            Map<String, String> arguments
+    ) {
+        boolean sharded = hasText(arguments.get("job-state-table"));
+
+        if (!sharded) {
+            if (arguments.containsKey("total-shards")) {
+                throw new IllegalArgumentException(
+                        "--total-shards requires --job-state-table"
+                );
+            }
+            return;
+        }
+
+        required(arguments, "state-table");
+        required(arguments, "job-id");
+        required(arguments, "total-shards");
+        required(arguments, "shard-number");
+
+        int totalShards = parsePositiveInt(
+                arguments.get("total-shards"),
+                "total-shards"
+        );
+        int shardNumber = parseNonNegativeInt(
+                arguments.get("shard-number"),
+                "shard-number"
+        );
+        if (shardNumber >= totalShards) {
+            throw new IllegalArgumentException(
+                    "--shard-number must be less than --total-shards"
+            );
+        }
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**
