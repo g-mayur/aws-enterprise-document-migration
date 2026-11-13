@@ -72,10 +72,6 @@ public final class MigrationCli {
     /**
      * Discovers source documents and writes them incrementally
      * to a new JSONL manifest.
-     *
-     * Existing manifests are never overwritten.
-     * If discovery or writing fails, the incomplete manifest
-     * created by this operation is deleted.
      */
     static void generateManifest(
             DocumentSource source,
@@ -100,10 +96,6 @@ public final class MigrationCli {
 
             source.validateConnection();
 
-            /*
-             * CREATE_NEW prevents accidental replacement
-             * of an existing manifest.
-             */
             try (ManifestWriter writer = new ManifestWriter(manifestPath)) {
 
                 try {
@@ -126,9 +118,6 @@ public final class MigrationCli {
 
                 } catch (Exception e) {
 
-                    /*
-                     * Close the writer before deleting the file.
-                     */
                     try {
                         Files.deleteIfExists(manifestPath);
                     } catch (IOException cleanupError) {
@@ -256,8 +245,11 @@ public final class MigrationCli {
 
     /**
      * Downloads, verifies and uploads one document.
+     *
+     * The downloaded size must match the manifest before
+     * checksum calculation and destination upload.
      */
-    private static void migrateDocument(
+    static void migrateDocument(
             DocumentSource source,
             DestinationWriter writer,
             DestinationKeyResolver keyResolver,
@@ -279,6 +271,20 @@ public final class MigrationCli {
                     temporaryFile,
                     StandardCopyOption.REPLACE_EXISTING
             );
+
+            long actualSize = Files.size(temporaryFile);
+
+            if (actualSize != record.sizeBytes()) {
+
+                throw new IllegalStateException(
+                        "Downloaded size mismatch for "
+                                + record.idempotencyKey()
+                                + ": expected="
+                                + record.sizeBytes()
+                                + ", actual="
+                                + actualSize
+                );
+            }
 
             String digest;
 
