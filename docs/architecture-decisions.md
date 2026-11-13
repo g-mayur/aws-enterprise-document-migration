@@ -8,3 +8,6 @@
 6. SSE-S3 is the starter encryption choice; customer requirements may require SSE-KMS or other controls.
 7. At-least-once event delivery and worker retries are assumed; operations must be idempotent.
 8. Scale parameters are measured in a representative pilot, not copied blindly from benchmark examples.
+
+9. Migration job and shard lifecycle state is stored separately from per-document state in a dedicated DynamoDB table with `pk`/`sk` keys. Job and shard transitions use conditional writes; shard registration is atomic with the job's registered-shard counter.
+10. A job can enter `READY` only after its declared number of shards has been registered. Worker scheduling and distributed dispatch are separate orchestration responsibilities.

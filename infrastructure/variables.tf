@@ -20,3 +20,8 @@ variable "batch_table_name" {
   type    = string
   default = "document-migration-batches"
 }
+
+variable "job_state_table_name" {
+  type    = string
+  default = "document-migration-job-state"
+}
