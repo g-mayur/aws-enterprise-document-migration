@@ -132,7 +132,7 @@ class DynamoDbJobStateStoreIntegrationTest {
 
     @Test
     void listsAllShardsInStableNumericOrderAndPersistsAcrossClientRecreation() {
-        assertTrue(store.createJob("job-4", 3, NOW));
+        assertTrue(store.createJob("job-4", 11, NOW));
         assertTrue(store.transitionJob("job-4", MigrationJobStatus.CREATED,
                 MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
         assertTrue(store.createShard("job-4", 10, NOW.plusSeconds(2)));
