@@ -19,6 +19,7 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 import java.net.URI;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -161,6 +162,102 @@ class DynamoDbJobStateStoreIntegrationTest {
         MigrationShardState shard = store.getShard("job-3", 0).orElseThrow();
         assertEquals(MigrationShardStatus.COMPLETED, shard.status());
         assertNull(shard.workerId());
+    }
+
+    @Test
+    void shardLeaseCanBeClaimedRenewedAndCompletedByItsOwner() {
+        assertTrue(store.createJob("lease-job", 1, NOW));
+        assertTrue(store.transitionJob("lease-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("lease-job", 0, NOW.plusSeconds(2)));
+
+        ShardLease lease = store.claimShard(
+                "lease-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(30)
+        ).orElseThrow();
+
+        assertEquals(NOW.plusSeconds(33).toEpochMilli(), lease.expiresAtEpochMillis());
+        assertTrue(store.claimShard(
+                "lease-job", 0, "worker-b", NOW.plusSeconds(10), Duration.ofSeconds(30)
+        ).isEmpty());
+
+        ShardLease renewed = store.renewShardLease(
+                lease, NOW.plusSeconds(20), Duration.ofSeconds(60)
+        ).orElseThrow();
+
+        assertEquals(NOW.plusSeconds(80).toEpochMilli(), renewed.expiresAtEpochMillis());
+        assertTrue(store.claimShard(
+                "lease-job", 0, "worker-b", NOW.plusSeconds(40), Duration.ofSeconds(30)
+        ).isEmpty());
+
+        assertTrue(store.transitionClaimedShard(
+                renewed, MigrationShardStatus.COMPLETED, NOW.plusSeconds(41), null
+        ));
+        assertEquals(MigrationShardStatus.COMPLETED,
+                store.getShard("lease-job", 0).orElseThrow().status());
+        assertNull(store.getShard("lease-job", 0).orElseThrow().workerId());
+    }
+
+    @Test
+    void expiredShardLeaseCanBeReclaimedAndOldWorkerIsFencedOut() {
+        assertTrue(store.createJob("reclaim-job", 1, NOW));
+        assertTrue(store.transitionJob("reclaim-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("reclaim-job", 0, NOW.plusSeconds(2)));
+
+        ShardLease oldLease = store.claimShard(
+                "reclaim-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(10)
+        ).orElseThrow();
+
+        assertFalse(store.transitionClaimedShard(
+                oldLease, MigrationShardStatus.COMPLETED, NOW.plusSeconds(14), null
+        ));
+
+        ShardLease newLease = store.claimShard(
+                "reclaim-job", 0, "worker-b", NOW.plusSeconds(14), Duration.ofSeconds(20)
+        ).orElseThrow();
+
+        assertNotEquals(oldLease.leaseToken(), newLease.leaseToken());
+        assertFalse(store.transitionClaimedShard(
+                oldLease, MigrationShardStatus.COMPLETED, NOW.plusSeconds(15), null
+        ));
+        assertFalse(store.renewShardLease(
+                oldLease, NOW.plusSeconds(15), Duration.ofSeconds(20)
+        ).isPresent());
+
+        assertTrue(store.transitionClaimedShard(
+                newLease, MigrationShardStatus.COMPLETED, NOW.plusSeconds(16), null
+        ));
+    }
+
+    @Test
+    void expiredLeaseCannotBeRenewedOrCompleted() {
+        assertTrue(store.createJob("expired-job", 1, NOW));
+        assertTrue(store.transitionJob("expired-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("expired-job", 0, NOW.plusSeconds(2)));
+
+        ShardLease lease = store.claimShard(
+                "expired-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ofSeconds(5)
+        ).orElseThrow();
+
+        assertTrue(store.renewShardLease(
+                lease, NOW.plusSeconds(7), Duration.ofSeconds(10)
+        ).isEmpty());
+        assertFalse(store.transitionClaimedShard(
+                lease, MigrationShardStatus.FAILED, NOW.plusSeconds(7), "late failure"
+        ));
+    }
+
+    @Test
+    void shardLeaseRejectsNonPositiveDuration() {
+        assertTrue(store.createJob("invalid-lease-job", 1, NOW));
+        assertTrue(store.transitionJob("invalid-lease-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard("invalid-lease-job", 0, NOW.plusSeconds(2)));
+
+        assertThrows(IllegalArgumentException.class, () -> store.claimShard(
+                "invalid-lease-job", 0, "worker-a", NOW.plusSeconds(3), Duration.ZERO
+        ));
     }
 
     @Test
