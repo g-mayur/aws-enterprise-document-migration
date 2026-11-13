@@ -217,6 +217,10 @@ class DynamoDbJobStateStoreIntegrationTest {
         ).orElseThrow();
 
         assertNotEquals(oldLease.leaseToken(), newLease.leaseToken());
+        assertFalse(store.transitionShard(
+                "reclaim-job", 0, MigrationShardStatus.RUNNING,
+                MigrationShardStatus.COMPLETED, "worker-b", NOW.plusSeconds(15), null
+        ));
         assertFalse(store.transitionClaimedShard(
                 oldLease, MigrationShardStatus.COMPLETED, NOW.plusSeconds(15), null
         ));
