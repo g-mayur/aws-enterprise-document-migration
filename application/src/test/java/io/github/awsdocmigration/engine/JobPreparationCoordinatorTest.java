@@ -5,12 +5,14 @@ import io.github.awsdocmigration.domain.MigrationShardStatus;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -193,6 +195,7 @@ class JobPreparationCoordinatorTest {
 
         private final Map<String, MigrationJobState> jobs = new HashMap<>();
         private final Map<String, MigrationShardState> shards = new HashMap<>();
+        private final Map<String, ShardLease> leases = new HashMap<>();
 
         @Override
         public boolean createJob(String jobId, int totalShards, Instant now) {
@@ -300,6 +303,101 @@ class JobPreparationCoordinatorTest {
                             MigrationShardState::shardNumber
                     ))
                     .toList();
+        }
+
+        @Override
+        public Optional<ShardLease> claimShard(
+                String jobId,
+                int shardNumber,
+                String workerId,
+                Instant now,
+                Duration leaseDuration
+        ) {
+            if (jobId == null || jobId.isBlank()
+                    || workerId == null || workerId.isBlank()
+                    || leaseDuration == null || leaseDuration.isZero()
+                    || leaseDuration.isNegative()) {
+                throw new IllegalArgumentException("Valid shard claim details are required");
+            }
+            String key = shardKey(jobId, shardNumber);
+            MigrationShardState current = shards.get(key);
+            if (current == null) {
+                return Optional.empty();
+            }
+            ShardLease existingLease = leases.get(key);
+            boolean pending = current.status() == MigrationShardStatus.PENDING;
+            boolean expired = current.status() == MigrationShardStatus.RUNNING
+                    && (existingLease == null
+                    || existingLease.expiresAtEpochMillis() <= now.toEpochMilli());
+            if (!pending && !expired) {
+                return Optional.empty();
+            }
+
+            long expiry = Math.addExact(
+                    now.toEpochMilli(), leaseDuration.toMillis()
+            );
+            ShardLease lease = new ShardLease(
+                    jobId, shardNumber, workerId, UUID.randomUUID().toString(), expiry
+            );
+            leases.put(key, lease);
+            shards.put(key, new MigrationShardState(
+                    jobId, shardNumber, MigrationShardStatus.RUNNING,
+                    workerId, null, current.createdAtEpochMillis(), now.toEpochMilli()
+            ));
+            return Optional.of(lease);
+        }
+
+        @Override
+        public Optional<ShardLease> renewShardLease(
+                ShardLease lease,
+                Instant now,
+                Duration leaseDuration
+        ) {
+            String key = shardKey(lease.jobId(), lease.shardNumber());
+            ShardLease current = leases.get(key);
+            MigrationShardState shard = shards.get(key);
+            if (current == null || shard == null
+                    || !current.leaseToken().equals(lease.leaseToken())
+                    || !current.workerId().equals(lease.workerId())
+                    || current.expiresAtEpochMillis() <= now.toEpochMilli()
+                    || leaseDuration == null || leaseDuration.isZero()
+                    || leaseDuration.isNegative()) {
+                return Optional.empty();
+            }
+            long expiry = Math.addExact(now.toEpochMilli(), leaseDuration.toMillis());
+            ShardLease renewed = new ShardLease(
+                    lease.jobId(), lease.shardNumber(), lease.workerId(),
+                    lease.leaseToken(), expiry
+            );
+            leases.put(key, renewed);
+            return Optional.of(renewed);
+        }
+
+        @Override
+        public boolean transitionClaimedShard(
+                ShardLease lease,
+                MigrationShardStatus target,
+                Instant now,
+                String errorMessage
+        ) {
+            String key = shardKey(lease.jobId(), lease.shardNumber());
+            ShardLease currentLease = leases.get(key);
+            MigrationShardState current = shards.get(key);
+            if (currentLease == null || current == null
+                    || current.status() != MigrationShardStatus.RUNNING
+                    || !currentLease.leaseToken().equals(lease.leaseToken())
+                    || !currentLease.workerId().equals(lease.workerId())
+                    || currentLease.expiresAtEpochMillis() <= now.toEpochMilli()
+                    || (target != MigrationShardStatus.COMPLETED
+                    && target != MigrationShardStatus.FAILED)) {
+                return false;
+            }
+            leases.remove(key);
+            shards.put(key, new MigrationShardState(
+                    lease.jobId(), lease.shardNumber(), target, null,
+                    errorMessage, current.createdAtEpochMillis(), now.toEpochMilli()
+            ));
+            return true;
         }
 
         @Override
