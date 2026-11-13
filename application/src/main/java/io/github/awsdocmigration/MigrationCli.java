@@ -14,6 +14,7 @@ import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
 import io.github.awsdocmigration.engine.JobPreparationCoordinator;
 import io.github.awsdocmigration.engine.JobStateStore;
 import io.github.awsdocmigration.engine.ManifestFingerprint;
+import io.github.awsdocmigration.engine.MigrationJobState;
 import io.github.awsdocmigration.engine.ShardExecutionCoordinator;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
