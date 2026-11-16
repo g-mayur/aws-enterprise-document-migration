@@ -5,6 +5,7 @@ import io.github.awsdocmigration.domain.MigrationShardStatus;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.sfn.SfnClient;
 import software.amazon.awssdk.services.sfn.model.DescribeExecutionResponse;
+import software.amazon.awssdk.services.sfn.model.DescribeExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.ExecutionStatus;
 
 import java.time.Instant;
@@ -39,7 +40,7 @@ class RecoveryWaveReconciliationCoordinatorTest {
         JobStateStore jobs = mock(JobStateStore.class);
         when(waves.get("job-1")).thenReturn(Optional.of(wave("TERMINAL", "FAILED")));
         when(waves.markReconciled(any(), eq(NOW))).thenReturn(true);
-        when(sfn.describeExecution(any())).thenReturn(DescribeExecutionResponse.builder()
+        when(sfn.describeExecution(any(DescribeExecutionRequest.class))).thenReturn(DescribeExecutionResponse.builder()
                 .executionArn("arn:aws:states:us-east-1:123456789012:execution:flow:exec-1")
                 .stateMachineArn("arn:aws:states:us-east-1:123456789012:stateMachine:flow")
                 .status(ExecutionStatus.FAILED)
