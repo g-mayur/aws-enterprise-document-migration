@@ -47,7 +47,7 @@ jobs:
         run: |
           bash -n scripts/deployment-preflight.sh
           bash -n scripts/local-validate.sh
-          scripts/deployment-preflight.sh --help
+          bash scripts/deployment-preflight.sh --help
 
       - name: Build worker image
         run: docker build -f application/Dockerfile -t document-migration-worker:ci application
