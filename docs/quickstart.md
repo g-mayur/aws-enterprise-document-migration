@@ -1,14 +1,55 @@
-# Quick start
+# AWS migration quickstart
 
-1. Build Java: `mvn -f application/pom.xml clean verify`.
+This guide covers actual AWS-backed migration execution. If you only want to clone the repository and run its build and automated tests, start with [Local development and validation](local-development.md). Local validation does not require AWS credentials.
+
+## Before using AWS
+
+Actual migration operations require:
+
+- An AWS account and an approved non-production environment.
+- AWS CLI v2 and an approved identity (IAM Identity Center profile or workload role).
+- An S3 destination bucket with the required encryption and access configuration.
+- DynamoDB document-state and job-state tables for durable sharded execution.
+- Step Functions and the supporting infrastructure when using recovery dispatch.
+- Source access and destination/state permissions appropriate to the selected connectors and execution mode.
+
+Do not use production data for the first pilot. Confirm region, quotas, security, retention, expected cost and rollback approach with the account owner before provisioning resources.
+
+## Configure credentials
+
+For IAM Identity Center, obtain the approved SSO start URL, SSO Region, account and role from your AWS administrator. Configure a named profile:
+
+```bash
+aws configure sso --profile migration-dev
+aws sso login --profile migration-dev
+export AWS_PROFILE=migration-dev
+aws sts get-caller-identity
+```
+
+Use the approved Region explicitly in commands. For workloads running on AWS, prefer a scoped ECS task role or EC2 instance role. Avoid long-lived access keys and never commit credentials or local AWS configuration files.
+
+If you do not have an AWS account or an approved role, do not proceed with the AWS sections below. You can still complete all local build and test steps in the local development guide.
+
+## Basic filesystem-to-S3 migration
+
+1. Build and test the application: `mvn --batch-mode clean verify -f application/pom.xml`.
 2. Provision or select an S3 destination bucket with SSE-S3 enabled.
-3. Use IAM Identity Center or an instance/task role. Grant only source read, destination write and required state-table actions.
-4. Prepare a JSONL manifest. Use a small test sample first.
-5. Run the CLI from `application/` with required options.
+3. Prepare a JSONL manifest. Use `examples/manifests/sample.jsonl` as a template. Each line is one document-version record.
+4. Run the CLI from `application/` with the required options:
 
-Example filesystem source: `java -jar target/document-migration-worker.jar --source-type filesystem --source-root /data/export --destination-bucket my-destination --manifest ../examples/manifests/sample.jsonl --version-policy ALL_VERSIONS --region us-east-1`
+```bash
+java -jar target/document-migration-worker.jar \
+  --source-type filesystem \
+  --source-root /absolute/path/to/source \
+  --destination-bucket YOUR_DESTINATION_BUCKET \
+  --manifest ../examples/manifests/sample.jsonl \
+  --version-policy ALL_VERSIONS \
+  --region us-east-1
+```
 
-**Important:** The sample manifest's `relativePath` must match the source-relative file path. The current CLI uses a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object uploads use sequential multipart streaming above 64 MiB; the current implementation spools one part at a time to temporary disk. Multipart resume across worker/process restarts is not implemented.
+The sample manifest's `relativePath` must match the source-relative file path.
+
+The current CLI stages each document to a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object uploads use sequential multipart streaming above 64 MiB and spool one part at a time to temporary disk. Multipart resume across worker/process restarts is not implemented.
 
 ## Run a durable sharded migration
 
@@ -48,6 +89,11 @@ java -jar target/document-migration-worker.jar \
 
 Run additional workers with `--shard-number` values from `1` through `15` and unique worker IDs. All workers must use the exact same manifest file bytes and the same `--total-shards` value. Workers verify the prepared fingerprint and registered shard plan before claiming their assigned shard; they do not attempt to prepare the job themselves.
 
-A worker executes one shard and records that shard as COMPLETED or FAILED. The per-shard worker command does not dispatch other workers or automatically retry failed shards. Use the separate operator recovery workflow below to plan and explicitly dispatch an eligible recovery wave. Post-execution reconciliation remains a separate step.
+A worker executes one shard and records that shard as COMPLETED or FAILED. The per-shard worker command does not dispatch other workers or automatically retry failed shards. Use the separate [operator recovery workflow](operator-recovery-workflow.md) to plan and explicitly dispatch an eligible recovery wave. Post-execution reconciliation remains a separate step.
 
-The operator recovery workflow is documented in [Operator recovery workflow](operator-recovery-workflow.md). It provides a read-only recovery plan and an explicitly confirmed, single-wave Step Functions dispatch; it does not replace post-execution reconciliation.
+## Related guides
+
+- [Local development and validation](local-development.md)
+- [Deployment validation](deployment-validation.md)
+- [Operator recovery workflow](operator-recovery-workflow.md)
+- [Production readiness](production-readiness.md)
