@@ -50,7 +50,7 @@ Requirements: Git, Java 17+, Maven 3.9+. Docker is recommended so the script can
       v
     Amazon S3 destination + DynamoDB state
 
-The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. Multipart resume across process restarts is not implemented.
+The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease and the writer can resume after a worker/process restart by reconciling the checkpoint with S3's uploaded parts. Resume behavior still requires validation in the target AWS environment.
 
 ## Configure for your environment
 
