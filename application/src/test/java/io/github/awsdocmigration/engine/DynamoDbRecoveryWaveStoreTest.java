@@ -89,7 +89,7 @@ class DynamoDbRecoveryWaveStoreTest {
     }
 
     @Test
-    void confirmedTerminalStatusReleasesSlotOnlyForCurrentOwner() {
+    void confirmedTerminalStatusKeepsSlotUntilReconciliation() {
         DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
         DynamoDbRecoveryWaveStore store = new DynamoDbRecoveryWaveStore(dynamoDb, "job-state");
         RecoveryWaveLease lease = new RecoveryWaveLease(
@@ -138,9 +138,9 @@ class DynamoDbRecoveryWaveStoreTest {
                         Map.entry("executionArn", AttributeValue.builder().s("arn:execution:1").build()),
                         Map.entry("stateMachineArn", AttributeValue.builder().s("arn:stateMachine:1").build()),
                         Map.entry("selectedShardDigest", AttributeValue.builder().s("a".repeat(64)).build()),
-                        Map.entry("selectedShardNumbers", AttributeValue.builder().l(
+                        Map.entry("selectedShardNumbers", AttributeValue.builder().l(List.of(
                                 AttributeValue.builder().n("0").build(),
-                                AttributeValue.builder().n("2").build()).build()),
+                                AttributeValue.builder().n("2").build())).build()),
                         Map.entry("createdAt", AttributeValue.builder().n(Long.toString(NOW.toEpochMilli())).build())
                 )).build());
 
