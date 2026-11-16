@@ -2,10 +2,12 @@
 
 ## Scope and safety
 
-The CLI now provides two recovery modes:
+The CLI provides operator-driven recovery planning, dispatch, and reconciliation, plus `configure-recovery` to bind immutable execution settings to a prepared job:
 
+- `configure-recovery`: validates the S3 manifest fingerprint and Standard state machine, then conditionally stores the immutable recovery configuration for a `READY` job.
 - `plan-recovery`: read-only validation and shard eligibility report.
 - `dispatch-recovery`: starts one recovery wave only after explicit operator confirmation.
+- `reconcile-recovery`: verifies the terminal execution and commits the durable reconciliation audit.
 
 The workflow validates the prepared job, exact manifest SHA-256 fingerprint, source bucket and prefix recorded by the S3 manifest, and complete contiguous shard registration. It selects only shards classified as pending, retryable failures, or running with an expired lease and remaining shard claims.
 
@@ -15,7 +17,7 @@ No Terraform, IAM role, AWS resource, deployment, or live migration is changed b
 
 ## Required operator inputs
 
-The job record stores the immutable manifest fingerprint and shard plan, but it does not store the source prefix, destination bucket, or version policy. These values must be supplied explicitly:
+The prepared job stores the immutable manifest fingerprint and shard plan. The separate immutable recovery-configuration item now stores the source/destination settings and execution limits after `configure-recovery` succeeds. The current `dispatch-recovery` command remains operator-driven and still requires explicit settings; automatic dispatch does not yet consume this stored configuration.
 
 - Job ID and job-state DynamoDB table.
 - Exact manifest S3 URI.
@@ -30,6 +32,34 @@ The job record stores the immutable manifest fingerprint and shard plan, but it 
 The destination bucket, version policy, lease duration and document-attempt limit cannot be verified against the prepared job because they are not persisted in its record. Supply the original values explicitly and confirm they match the original migration configuration before dispatch. The worker still verifies the prepared manifest fingerprint before claiming its shard.
 
 The manifest must be an S3-source manifest with an explicit immutable source version or snapshot identity for each record. Legacy records without this identity are rejected.
+
+## Step 0: bind immutable recovery settings
+
+After `prepare-job` completes successfully, bind the exact recovery settings once:
+
+```bash
+java -jar target/document-migration-worker.jar \
+  --mode configure-recovery \
+  --job-id job-001 \
+  --job-state-table migration-job-state \
+  --manifest-s3-uri s3://migration-staging/manifests/job-001.jsonl \
+  --source-bucket source-bucket \
+  --source-prefix "exports/" \
+  --destination-bucket destination-bucket \
+  --state-table migration-document-state \
+  --version-policy ALL_VERSIONS \
+  --lease-seconds 300 \
+  --max-attempts 5 \
+  --max-concurrent-shards 20 \
+  --state-machine-arn arn:aws:states:us-east-1:123456789012:stateMachine:document-migration-shard-orchestration \
+  --region us-east-1
+```
+
+The command downloads the specified S3 manifest, recalculates its SHA-256 fingerprint, verifies it matches the prepared `READY` job, and verifies the state machine is Standard. It then atomically writes a separate `RECOVERY_CONFIG` item only if the job remains `READY` with that fingerprint. The DynamoDB transaction prevents configuration binding to a missing, unprepared, or differently fingerprinted job.
+
+The configuration includes source bucket/prefix, destination bucket, manifest URI and fingerprint, document/job state tables, state-machine ARN, version policy, Region, worker lease duration, document-attempt limit, and maximum shard concurrency. The concurrency value must match the deployed Step Functions Map configuration; this command records the value but does not inspect the definition's Map state.
+
+Repeating the exact same configuration is safe. A different configuration for a job that already has one is rejected; do not delete or edit the item to force a change. This command does not start workers or enable unattended recovery.
 
 ## Step 1: review a read-only plan
 
