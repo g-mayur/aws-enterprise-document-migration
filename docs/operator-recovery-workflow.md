@@ -29,7 +29,7 @@ The prepared job stores the immutable manifest fingerprint and shard plan. The s
 - Standard Step Functions state machine ARN for dispatch.
 - Explicit confirmation that any previous execution for this job has reached a terminal state.
 
-The destination bucket, version policy, lease duration and document-attempt limit cannot be verified against the prepared job because they are not persisted in its record. Supply the original values explicitly and confirm they match the original migration configuration before dispatch. The worker still verifies the prepared manifest fingerprint before claiming its shard.
+The destination bucket, version policy, lease duration and document-attempt limit are not derivable from the prepared job. The configure command records the operator-supplied values as the immutable recovery configuration, so verify them against the original migration deployment before binding. The current dispatch command still takes explicit values; the next milestone will make dispatch consume the persisted record.
 
 The manifest must be an S3-source manifest with an explicit immutable source version or snapshot identity for each record. Legacy records without this identity are rejected.
 
