@@ -6,6 +6,7 @@ import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.sfn.SfnClient;
 import software.amazon.awssdk.services.sfn.model.DescribeExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.ListExecutionsRequest;
+import software.amazon.awssdk.services.sfn.model.ListExecutionsResponse;
 import software.amazon.awssdk.services.sfn.model.ExecutionStatus;
 
 import java.io.IOException;
@@ -44,7 +45,7 @@ public final class RecoveryWaveExecutionGuard {
                 request.nextToken(nextToken);
             }
 
-            final var page;
+            final ListExecutionsResponse page;
             try {
                 page = stepFunctions.listExecutions(request.build());
             } catch (SdkException failure) {
