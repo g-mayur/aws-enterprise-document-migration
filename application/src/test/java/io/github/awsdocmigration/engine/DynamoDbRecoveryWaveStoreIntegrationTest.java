@@ -157,7 +157,6 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
     }
 
     @Test
-    @Test
     void controllerObservationUpdatesOnlyTheExactActiveExecution() {
         RecoveryWaveLease lease = store.acquire(
                 "job-observe", "wave-observe", "owner-observe", List.of(0),
@@ -182,6 +181,7 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
                 "A stale observation must not overwrite a terminal wave");
     }
 
+    @Test
     void concurrentAcquisitionAllowsExactlyOneOwnerAndUnknownStatusKeepsSlotLocked() throws Exception {
         int contenders = 12;
         CountDownLatch ready = new CountDownLatch(contenders);
