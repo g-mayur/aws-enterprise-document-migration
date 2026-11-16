@@ -25,6 +25,7 @@ The job record stores the immutable manifest fingerprint and shard plan, but it 
 - Version policy used for this migration.
 - Worker lease duration and document-attempt limit used for this migration.
 - Standard Step Functions state machine ARN for dispatch.
+- Explicit confirmation that any previous execution for this job has reached a terminal state.
 
 The destination bucket, version policy, lease duration and document-attempt limit cannot be verified against the prepared job because they are not persisted in its record. Supply the original values explicitly and confirm they match the original migration configuration before dispatch. The worker still verifies the prepared manifest fingerprint before claiming its shard.
 
@@ -59,6 +60,7 @@ Only after reviewing the plan, run:
 java -jar target/document-migration-worker.jar \
   --mode dispatch-recovery \
   --confirm-recovery true \
+  --confirm-prior-execution-terminal true \
   --job-id job-001 \
   --job-state-table migration-job-state \
   --state-table migration-document-state \
@@ -76,14 +78,15 @@ java -jar target/document-migration-worker.jar \
 The command:
 
 1. Repeats all job, manifest, source and shard-plan validation.
-2. Confirms the supplied state machine is a Standard workflow.
-3. Builds the exact input shape expected by `infrastructure/orchestration.tf`, including a complete worker CLI command for each selected shard.
-4. Acquires the durable job-scoped recovery-wave lock in the existing job-state table.
-5. Starts or resolves the deterministic Step Functions execution using the fail-closed dispatcher.
+2. Confirms the supplied state machine is a Standard workflow and checks for running executions associated with the same job.
+3. Requires the operator to confirm that the prior execution is terminal because Step Functions execution listings are eventually consistent.
+4. Builds the exact input shape expected by `infrastructure/orchestration.tf`, including a complete worker CLI command for each selected shard.
+5. Acquires the durable job-scoped recovery-wave lock in the existing job-state table.
+6. Starts or resolves the deterministic Step Functions execution using the fail-closed dispatcher.
 
 The Map concurrency ceiling remains the value configured in the deployed state machine. The operator command does not override it. The generated execution input is checked against the Step Functions 256 KiB payload limit before the recovery-wave lock is acquired.
 
-If another recovery wave is active, no new execution is started. If the Step Functions start outcome cannot be confirmed, the wave remains ACTIVE/UNKNOWN and the command reports that manual inspection is required. Do not delete or edit the recovery-wave record to force another run.
+If another recovery wave is active, or a running Step Functions execution for the same job is found, no new execution is started. The execution-list preflight is eventually consistent; before dispatch, independently verify in Step Functions that the previous execution for this job is terminal, then provide the explicit confirmation flag. If the Step Functions start outcome cannot be confirmed, the wave remains ACTIVE/UNKNOWN and the command reports that manual inspection is required. Do not delete or edit the recovery-wave record to force another run.
 
 ## IAM permissions for the operator
 
