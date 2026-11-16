@@ -574,8 +574,9 @@ public final class MigrationCli {
                 result.exhaustedShards(), result.finalizationStatus()
         );
         System.out.println(
-                "Reconciliation is read-only for shard records. Only the existing "
-                        + "conditional job-finalization transition may update the job status.");
+                "A durable reconciliation audit record was committed atomically with the "
+                        + "recovery-wave unlock. It includes the shard disposition counts "
+                        + "and finalization result.");
     }
 
     private static RecoveryWavePlanner.Plan loadRecoveryPlan(
