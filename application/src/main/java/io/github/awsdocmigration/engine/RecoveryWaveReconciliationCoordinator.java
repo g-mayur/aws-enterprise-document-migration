@@ -98,6 +98,11 @@ public final class RecoveryWaveReconciliationCoordinator {
         }
 
         Optional<MigrationJobState> finalized = finalizer.finalizeIfReady(jobId, inspectedAt);
+        if (!waveStore.markReconciled(wave, inspectedAt)) {
+            throw new IllegalStateException(
+                    "Recovery wave changed before reconciliation could be recorded; "
+                            + "the wave remains unavailable for another dispatch.");
+        }
         MigrationJobState latest = jobStateStore.getJob(jobId)
                 .orElseThrow(() -> new IllegalStateException("Job disappeared during reconciliation"));
 
