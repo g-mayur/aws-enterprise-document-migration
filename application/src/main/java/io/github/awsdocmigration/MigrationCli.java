@@ -24,6 +24,7 @@ import io.github.awsdocmigration.engine.DynamoDbRecoveryWaveStore;
 import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
 import io.github.awsdocmigration.engine.RecoveryWaveExecutionGuard;
 import io.github.awsdocmigration.engine.RecoveryWaveReconciliationCoordinator;
+import io.github.awsdocmigration.engine.RecoveryJobConfiguration;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -114,7 +115,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, configure-recovery, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
                 );
             }
         }
