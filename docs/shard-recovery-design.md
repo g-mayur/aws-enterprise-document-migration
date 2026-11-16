@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposed design. This document records the recovery boundary before adding automatic worker redispatch. It does not change application behavior or AWS infrastructure.
+The original recovery design described below has been implemented as a guarded operator workflow and bounded foreground controller. The current starter includes read-only inspection/planning, immutable recovery configuration, operator-confirmed dispatch, exact-execution reconciliation, immutable audit history and bounded automatic recovery. See [operator-recovery-workflow.md](operator-recovery-workflow.md) for the current commands and [implementation-status.md](implementation-status.md) for the capability inventory.
 
-## Problem
+Implementation does not establish target-account validation or production readiness. No scheduler, background service or AWS deployment is included.
 
-The current orchestration starts one ECS worker for each prepared shard. PR #27 adds bounded retries for the optimized ECS `runTask.sync` error `AmazonECS.Unknown`, which represents an ECS RunTask launch rejection. That retry happens before a worker can claim the shard.
+## Problem and recovery boundary
 
-A worker can also fail after it starts. The durable shard state then has three materially different conditions:
+The orchestration starts one ECS worker for each prepared shard. The bounded Step Functions retry for `AmazonECS.Unknown` covers ECS RunTask launch rejection before a worker can claim a shard. A worker can also fail after it starts, so recovery must use durable shard state rather than treating an orchestration retry counter as the source of truth.
 
 | Durable state | Meaning | Safe recovery condition |
 |---|---|---|
@@ -26,96 +26,43 @@ A worker can also fail after it starts. The durable shard state then has three m
 - Every successful claim increments the persisted attempt count and receives a new fencing token.
 - Lease renewal and terminal transitions require the current lease token and an unexpired lease. A stale worker cannot complete a shard after it has been reclaimed.
 - Job finalization waits for all registered shards to be terminal. A retry-eligible failure, pending shard, or running shard blocks finalization.
-- PR #27 retries only `AmazonECS.Unknown`; it deliberately does not retry broad task/application failures.
+- ECS launch-rejection retries remain separate from durable worker-claim attempts.
 
-These guarantees are the source of truth. Orchestration retry counters must never be treated as a replacement for the DynamoDB attempt count.
+## Implemented recovery workflow
 
-## Recommended recovery architecture
+The workflow is a finite controller around the existing planner, dispatcher and reconciliation coordinator:
 
-Introduce a reconciliation phase that can be run after an orchestration wave fails or on an explicitly configured schedule:
-
-1. Read the prepared job and its complete shard set from the job-state table using consistent reads.
-2. Classify each shard using its persisted status, attempt count, and lease expiry.
-3. Dispatch only `PENDING`, retryable `FAILED`, and expired `RUNNING` shards. Do not dispatch active, completed, or exhausted shards.
-4. Let each dispatched worker call the existing conditional `claimShard` operation. The read performed by the reconciler is advisory; the atomic claim is the final authority. If two reconcilers race, at most one worker can own a given shard lease.
-5. Keep the existing ECS launch-rejection retry separate from the durable worker-claim budget. A launch rejection does not consume a shard claim.
-6. After workers finish, run job finalization again. The job becomes `COMPLETED` only when every shard completes, or `COMPLETED_WITH_ERRORS` when every shard is terminal and at least one has exhausted its attempts.
-7. Report exhausted shards with their last error for operator review. Do not silently reset attempt counts or mutate DynamoDB records manually.
-
-The shard read model should expose the lease expiry timestamp so the reconciler can distinguish an active `RUNNING` shard from an expired one. This is a read-model change only; the existing conditional claim and fencing-token writes remain authoritative.
-
-## Retry and timing rules
-
-- Never start a replacement while a `RUNNING` lease is still valid.
-- Use the persisted lease expiry as the earliest safe reclaim time. Do not hard-code the default 300-second lease; deployments can configure a different duration.
-- Keep ECS API launch retries bounded and separate from worker claim attempts.
-- Do not add a broad Step Functions retry for `States.TaskFailed` or all ECS task failures. A failed task may have claimed a shard, and an abruptly terminated worker may leave a live lease until it expires.
-- A reconciliation pass must be idempotent. Repeated passes may rediscover eligible shards, but only the conditional claim may grant ownership.
-- Preserve the configured maximum concurrent shard count for every recovery wave.
-
-## Implementation sequence
-
-1. **Read-only visibility:** expose lease expiry in the shard read model and provide a job inspection/reporting operation that classifies shards without changing state.
-2. **Recovery dispatch:** add a reconciliation entry point that selects eligible shards and dispatches workers while preserving the existing concurrency limit and immutable manifest fingerprint.
-3. **Finalization and reporting:** make the recovery flow re-check durable state, finalize only when all shards are terminal, and produce an actionable report for exhausted shards.
-4. **Automated validation:** cover pending launch rejection, retryable failure, active lease, expired lease, attempt exhaustion, concurrent reconcilers, duplicate worker starts, stale worker fencing, and mixed success/failure finalization.
-5. **Target AWS pilot:** validate ECS launch rejection, worker process termination, lease expiry, duplicate dispatch, and recovery behavior in a non-production environment before enabling production use.
-
-## Operator replay policy
-
-An exhausted shard must not be made retryable by editing its DynamoDB item or resetting its attempt count. An operator replay mechanism needs an explicit, auditable policy (for example, a new recovery generation or a separately approved retry budget) and must preserve completed-document idempotency and manifest fingerprint checks. That policy is intentionally outside the first automatic-reconciliation implementation.
-
-## Non-goals
-
-- No AWS deployment or live migration.
-- No automatic reset of exhausted shards.
-- No increase to the three-claim budget.
-- No assumption that ECS task launch retries and durable shard attempts are interchangeable.
-- No production-readiness claim based on unit tests alone.
-
-
-## First implementation slice: read-only inspection
-
-The first implementation adds a read-only `inspect-job` CLI mode. It reports each shard's status, durable attempt count, worker, lease expiry, last error, and a conservative recovery assessment.
-
-Example invocation:
-
-```bash
-java -jar document-migration-worker.jar \
-  --mode inspect-job \
-  --job-id JOB_ID \
-  --job-state-table JOB_STATE_TABLE \
-  --region AWS_REGION
-```
-
-The inspection does not claim shards, dispatch ECS tasks, or write to DynamoDB. A running shard with missing lease-expiry metadata is classified as unknown and is never recommended for immediate replacement. This command is an operator visibility tool, not an automatic recovery mechanism.
-
-## Bounded automatic orchestration contract
-
-The next orchestration layer must be a finite controller around the existing planner, dispatcher, and reconciliation coordinator. It must not introduce a second source of truth for shard ownership or retry counts.
-
-### Required control loop
-
-1. Load and validate the immutable job recovery configuration before inspecting shards. The configuration must bind the source bucket/prefix, destination bucket, manifest S3 URI, version policy, document-state table, job-state table, worker lease duration, document-attempt limit, AWS Region, Standard state-machine ARN, and configured concurrency ceiling.
+1. Load and validate the immutable job recovery configuration.
 2. Build a fresh read-only recovery plan from the exact manifest fingerprint and complete registered shard set.
-3. If no shard is eligible, stop. Report active leases, unknown lease expiry, completed shards, and exhausted shards separately.
-4. Acquire the existing job-scoped recovery-wave lease before dispatch. The durable wave lock and generation fencing remain mandatory.
-5. Dispatch only the selected shard numbers. The worker-side conditional claim remains authoritative; a stale plan must never grant ownership.
-6. Wait only by observing the exact persisted Step Functions execution identity. An ambiguous start, unavailable execution, input mismatch, or unknown status must leave the wave locked and stop the controller.
-7. Reconcile the terminal execution using the existing strongly consistent shard reads, guarded finalizer, and atomic immutable audit transaction.
-8. Continue only after reconciliation commits and a new plan confirms eligible work remains. Enforce a finite controller-level wave ceiling and a bounded overall runtime; do not spin on active leases.
-9. Stop when all shards are terminal, no eligible shard exists, the configured wave ceiling is reached, the execution outcome is ambiguous, or a safety gate fails. Emit an operator-actionable summary.
+3. Stop if no shard is eligible; active leases, unknown lease expiry and exhausted shards are not dispatched.
+4. Acquire the existing job-scoped recovery-wave lock before dispatch.
+5. Dispatch only selected shard numbers. The worker-side conditional claim remains authoritative.
+6. Observe only the exact persisted Step Functions execution identity. Ambiguous identity or status leaves the wave locked and stops the controller.
+7. Reconcile terminal execution using strongly consistent shard reads, the guarded finalizer and the atomic immutable audit transaction.
+8. Continue only after reconciliation commits and a fresh plan confirms eligible work remains.
+9. Stop at the wave/runtime ceiling, on a safety failure, or when no eligible work remains.
 
-### Mandatory invariants
+The CLI limits the controller to 1–10 waves, 1–30 seconds between polls and 30–3600 seconds total runtime. It is explicitly invoked in the foreground and is not a scheduler.
+
+## Mandatory invariants
 
 - DynamoDB's three total shard claims remain authoritative. Controller iterations and ECS launch retries do not increase that budget.
 - Never dispatch a RUNNING shard with an unexpired lease or unknown lease expiry.
 - Never reset attempt counts, clear leases, or replay an exhausted shard automatically.
 - Never overlap recovery waves for one job. A wave slot is reusable only after its audit-backed reconciliation transaction commits.
 - Preserve the configured Step Functions Map concurrency ceiling; do not infer or raise it from selected shard count.
-- Bind all worker execution settings immutably to the prepared job before enabling unattended recovery. Existing operator-supplied values are not sufficient evidence that a retry uses the original migration configuration.
+- Bind worker execution settings immutably to the prepared job before recovery dispatch.
 - A terminal Step Functions status is not proof that all shards are terminal. Durable shard state and the existing finalizer remain authoritative.
 
-### Enablement gate
+## Operator replay policy
 
-Automatic recovery remains disabled until immutable recovery configuration is persisted and verified, the controller has bounded stop conditions, unit and DynamoDB Local tests cover concurrent controllers and ambiguous execution outcomes, and a non-production AWS pilot validates worker termination, lease expiry, duplicate dispatch, and reconciliation. This contract does not authorize a deployment or live migration.
+An exhausted shard must not be made retryable by editing its DynamoDB item or resetting its attempt count. A future operator replay mechanism needs an explicit, auditable policy and must preserve completed-document idempotency and manifest fingerprint checks. That policy is outside the current automatic-recovery implementation.
+
+## Non-goals and validation gate
+
+- No AWS deployment or live migration is performed by the recovery CLI.
+- No automatic reset of exhausted shards or increase to the three-claim budget.
+- No unattended scheduler or background recovery service.
+- No production-readiness claim based on unit tests or CI alone.
+
+A controlled non-production AWS pilot must validate worker termination, lease expiry, duplicate dispatch, exact-execution observation, reconciliation and audit behavior before operational use.
