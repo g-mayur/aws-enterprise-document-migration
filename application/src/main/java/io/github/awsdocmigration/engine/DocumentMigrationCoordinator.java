@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import io.github.awsdocmigration.domain.DocumentMigrationStatus;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 
 import java.time.Duration;
 import java.time.Instant;
