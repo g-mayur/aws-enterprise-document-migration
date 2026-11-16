@@ -73,12 +73,6 @@ class S3VersionedPaginationApiIntegrationTest {
                 assertNotNull(olderVersionId);
                 assertNotNull(latestVersionId);
                 assertNotEquals(olderVersionId, latestVersionId);
-                if (key.equals(boundaryKey)) {
-                    expectedContentByVersion.put(olderVersionId,
-                            new String(olderContent, StandardCharsets.UTF_8));
-                    expectedContentByVersion.put(latestVersionId,
-                            new String(latestContent, StandardCharsets.UTF_8));
-                }
             }
 
             // Overwrite the boundary key with identifiable payloads for exact-version read assertions.
@@ -88,7 +82,6 @@ class S3VersionedPaginationApiIntegrationTest {
             String boundaryLatestId = s3.putObject(
                     PutObjectRequest.builder().bucket(bucket).key(boundaryKey).build(),
                     RequestBody.fromBytes(latestContent)).versionId();
-            expectedContentByVersion.clear();
             expectedContentByVersion.put(boundaryOlderId,
                     new String(olderContent, StandardCharsets.UTF_8));
             expectedContentByVersion.put(boundaryLatestId,
