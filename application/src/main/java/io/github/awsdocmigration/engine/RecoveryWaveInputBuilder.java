@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.awsdocmigration.domain.VersionPolicy;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 
@@ -13,6 +14,7 @@ import java.util.Objects;
 public final class RecoveryWaveInputBuilder {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int MAX_STEP_FUNCTIONS_INPUT_BYTES = 256 * 1024;
 
     private RecoveryWaveInputBuilder() {
     }
@@ -84,7 +86,12 @@ public final class RecoveryWaveInputBuilder {
         }
 
         try {
-            return JSON.writeValueAsString(root);
+            String input = JSON.writeValueAsString(root);
+            if (input.getBytes(StandardCharsets.UTF_8).length > MAX_STEP_FUNCTIONS_INPUT_BYTES) {
+                throw new IllegalArgumentException(
+                        "Recovery input exceeds the Step Functions 256 KiB limit; reduce the selected shard set.");
+            }
+            return input;
         } catch (JsonProcessingException impossibleForJsonNodes) {
             throw new IllegalStateException("Unable to serialize recovery execution input", impossibleForJsonNodes);
         }
