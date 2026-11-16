@@ -89,6 +89,10 @@ public final class MigrationCli {
 
                 case "prepare-job" -> prepareJob(dynamoDb, arguments);
 
+                case "configure-recovery" -> configureRecovery(
+                        dynamoDb, s3, stepFunctions, arguments, region
+                );
+
                 case "inspect-job" -> inspectJob(dynamoDb, arguments);
 
                 case "plan-recovery" -> planRecovery(dynamoDb, s3, arguments);
@@ -354,6 +358,70 @@ public final class MigrationCli {
      * Prepares the durable job and registers its complete shard plan.
      * Run this once before launching the independent shard workers.
      */
+    /**
+     * Binds exact recovery execution settings to an already prepared job.
+     * The manifest fingerprint is recalculated from S3 before the immutable bind.
+     */
+    private static void configureRecovery(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            SfnClient stepFunctions,
+            Map<String, String> arguments,
+            String region
+    ) throws Exception {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        String manifestS3Uri = required(arguments, "manifest-s3-uri");
+        Path manifestPath = resolveManifestPath(s3, arguments);
+        String fingerprint;
+        try {
+            fingerprint = ManifestFingerprint.calculate(manifestPath);
+        } finally {
+            Files.deleteIfExists(manifestPath);
+        }
+
+        String stateMachineArn = required(arguments, "state-machine-arn");
+        var stateMachine = stepFunctions.describeStateMachine(
+                DescribeStateMachineRequest.builder().stateMachineArn(stateMachineArn).build());
+        if (stateMachine.type() != StateMachineType.STANDARD) {
+            throw new IllegalArgumentException(
+                    "Recovery requires a Standard Step Functions state machine");
+        }
+
+        RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
+                fingerprint,
+                required(arguments, "source-bucket"),
+                requiredPresent(arguments, "source-prefix"),
+                required(arguments, "destination-bucket"),
+                manifestS3Uri,
+                required(arguments, "state-table"),
+                jobStateTable,
+                stateMachineArn,
+                VersionPolicy.valueOf(required(arguments, "version-policy")),
+                region,
+                parsePositiveInt(required(arguments, "lease-seconds"), "lease-seconds"),
+                parsePositiveInt(required(arguments, "max-attempts"), "max-attempts"),
+                parsePositiveInt(required(arguments, "max-concurrent-shards"), "max-concurrent-shards")
+        );
+
+        JobStateStore store = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+        MigrationJobState job = store.getJob(jobId).orElseThrow(() ->
+                new IllegalArgumentException("Migration job was not found: " + jobId));
+        if (job.status() != MigrationJobStatus.READY
+                || job.manifestFingerprint() == null
+                || !job.manifestFingerprint().equals(fingerprint)) {
+            throw new IllegalStateException(
+                    "Recovery configuration requires a READY job with the exact prepared manifest fingerprint");
+        }
+        if (!store.bindRecoveryConfiguration(jobId, configuration)) {
+            throw new IllegalStateException(
+                    "Recovery configuration conflicts with the immutable configuration already bound to this job");
+        }
+        System.out.printf(
+                "Immutable recovery configuration bound. job=%s manifestSha256=%s stateMachine=%s maxConcurrentShards=%d%n",
+                jobId, fingerprint, stateMachineArn, configuration.maximumConcurrentShards());
+    }
+
     private static void prepareJob(
             DynamoDbClient dynamoDb,
             Map<String, String> arguments
