@@ -223,6 +223,21 @@ class MigrationCliTest {
     }
 
     @Test
+    void recoveryDispatchRequiresExplicitOperatorConfirmation() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of("confirm-recovery", "false"))
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of())
+        );
+        assertDoesNotThrow(
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of("confirm-recovery", "true"))
+        );
+    }
+
+    @Test
     void acceptsCompleteShardedExecutionConfiguration() {
         Map<String, String> arguments = Map.of(
                 "job-state-table", "migration-jobs",
