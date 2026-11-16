@@ -1,5 +1,6 @@
 package io.github.awsdocmigration.connector.s3;
 
+import io.github.awsdocmigration.storage.S3ClientFactory;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
 import org.junit.jupiter.api.Test;
