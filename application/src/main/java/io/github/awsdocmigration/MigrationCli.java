@@ -473,12 +473,12 @@ public final class MigrationCli {
         String jobStateTable = required(arguments, "job-state-table");
         VersionPolicy versionPolicy = VersionPolicy.valueOf(required(arguments, "version-policy"));
         int leaseSeconds = parsePositiveInt(
-                arguments.getOrDefault("lease-seconds", "300"), "lease-seconds");
+                required(arguments, "lease-seconds"), "lease-seconds");
         if (leaseSeconds < 3) {
             throw new IllegalArgumentException("--lease-seconds must be at least 3");
         }
         int maximumDocumentAttempts = parsePositiveInt(
-                arguments.getOrDefault("max-attempts", "5"), "max-attempts");
+                required(arguments, "max-attempts"), "max-attempts");
 
         String waveId = UUID.randomUUID().toString();
         String ownerToken = UUID.randomUUID().toString();
