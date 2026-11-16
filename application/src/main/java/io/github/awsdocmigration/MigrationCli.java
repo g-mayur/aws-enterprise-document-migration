@@ -737,7 +737,7 @@ public final class MigrationCli {
         }
     }
 
-    private static int boundedInt(
+    static int boundedInt(
             Map<String, String> arguments,
             String name,
             int minimum,
