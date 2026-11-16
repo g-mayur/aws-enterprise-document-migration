@@ -1,6 +1,6 @@
 # Terraform workload foundation
 
-This Terraform root module provisions the migration workload resources: destination/staging S3 buckets with SSE-S3 and public-access blocking, DynamoDB document-state, batch-metadata and job/shard-state tables, ECS/Fargate worker resources, and Step Functions orchestration.
+This Terraform root module provisions the migration workload resources: destination/staging S3 buckets with SSE-S3 and public-access blocking, DynamoDB document-state, batch-metadata and job/shard-state tables, ECS/Fargate worker resources, Step Functions orchestration, and CloudWatch operational monitoring.
 
 It expects an existing worker image, private subnet IDs, and worker security group IDs. For a new AWS account/VPC, first deploy the separate [bootstrap stack](bootstrap/README.md). That stack creates a private VPC, two private subnets, VPC endpoints for ECR/CloudWatch Logs/S3/DynamoDB, an outbound-only worker security group, and an immutable ECR repository. Publish the worker image, then supply the bootstrap outputs to this workload stack.
 
@@ -26,6 +26,25 @@ Set these values before planning:
 - worker_subnet_ids and worker_security_group_ids: network placement for Fargate. The bootstrap stack outputs matching private subnet IDs and worker security group ID. Its private subnets have ECR, CloudWatch Logs, S3 and DynamoDB connectivity through VPC endpoints.
 - source_bucket_arn: source S3 bucket ARN. Workers receive ListBucket/GetObject access to this bucket; the staging bucket is used for the manifest and the destination bucket for writes.
 - max_concurrent_shards: Distributed Map concurrency ceiling. Tune against account Fargate quotas, source/destination throughput and DynamoDB capacity.
+
+## CloudWatch monitoring
+
+The workload stack creates a dashboard covering Step Functions execution counts, ECS cluster CPU/memory utilization, and DynamoDB read/write throttling for both migration state tables. It also creates alarms for failed/timed-out state-machine executions, sustained high worker CPU/memory, and read/write throttles on either state table.
+
+Optional notifications can be configured by supplying an existing SNS topic ARN (or another supported CloudWatch alarm action ARN) through `monitoring_alarm_actions`. The default is an empty list: alarms and dashboard are created, but no notifications are sent. The stack does not create an SNS topic or subscribe recipients.
+
+Thresholds and evaluation periods are configurable through `monitoring_cpu_threshold`, `monitoring_memory_threshold`, `monitoring_period_seconds`, and `monitoring_evaluation_periods`. Alarm resources and the dashboard name are exposed as Terraform outputs.
+
+### Initial operational objectives
+
+Use these as pilot starting points, not contractual or production-validated SLOs:
+
+- Orchestration reliability: investigate every failed or timed-out migration execution; the corresponding alarms trigger on one event in a period.
+- Worker capacity: keep average ECS cluster CPU and memory below 80%; alarms default to two consecutive five-minute periods at or above 80%.
+- State-store availability: target zero DynamoDB read/write throttle events; alarms trigger on the first event in a five-minute period.
+- Visibility: review the dashboard during each migration wave and retain worker logs according to the configured log-group retention.
+
+These are infrastructure-level indicators. They do not measure document-level success rate, end-to-end migration latency, checksum mismatch rate, queue age, or dead-letter backlog. Those require application-level metrics and representative pilot data before numerical SLOs can be approved. CloudWatch metrics may also be absent when no executions or worker tasks are running; missing data is intentionally treated as non-breaching.
 
 ## Starting an orchestration execution
 

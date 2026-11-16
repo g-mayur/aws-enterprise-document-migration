@@ -10,13 +10,14 @@ A checked implementation item means the capability exists in the current starter
 - [x] Sharded migration CLI integrated with durable document state, shard leases, deterministic assignment and job finalization; end-to-end pilot validation remains required.
 - [x] Worker identity, shard/document lease renewal and fencing implemented; long-running and interrupted-worker behavior must still be exercised in the target environment.
 - [x] Read-only recovery planning, immutable recovery configuration, operator-confirmed dispatch, exact-execution reconciliation, immutable audit history and bounded foreground automatic recovery are implemented as starter capabilities. AWS integration and operational behavior remain unvalidated in a target account.
+- [x] Terraform provisions a CloudWatch operations dashboard and alarms for Step Functions failures/timeouts, ECS worker CPU/memory pressure, and DynamoDB state-table throttling. Alarm notifications require an externally supplied action ARN; document-level SLO metrics and pilot calibration remain outstanding.
 
 ## Outstanding implementation work
 
 - [ ] Multipart upload resume across worker/process restarts implemented.
 - [ ] Unattended scheduled dispatch/retry and reconciliation implemented. This is intentionally not included in the current release; the controller is foreground and explicit opt-in only.
 - [x] Dedicated dead-letter reporting and exhausted-shard manual-review metadata implemented in the existing job-state table; operational ownership and target-environment procedures still require validation.
-- [ ] Production monitoring, alarms, dashboards and operational SLOs implemented.
+- [ ] Application-level metrics for document success/failure, migration latency, checksum mismatches, queue age and dead-letter backlog implemented and calibrated into production SLOs.
 
 ## Pilot and production validation
 
@@ -30,6 +31,8 @@ A checked implementation item means the capability exists in the current starter
 - [ ] Service quotas requested and validated in target Region.
 - [ ] Load test completed with representative file-size distribution and source API behavior.
 - [ ] Recovery, restart, reconciliation and rollback/restore rehearsed, including worker failure and expired-lease scenarios.
+- [ ] CloudWatch alarms, SNS routing, dashboard access, escalation ownership and runbooks tested in a non-production account.
+- [ ] Operational objectives calibrated using representative pilot data; document-level success rate, end-to-end latency, checksum mismatches and dead-letter backlog are measured.
 - [ ] Cost model includes requests, storage, data transfer, logs, DynamoDB, compute and backup.
 - [ ] Legal, privacy, residency and records-retention requirements approved.
 
