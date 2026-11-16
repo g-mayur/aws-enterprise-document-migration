@@ -368,7 +368,8 @@ public final class DynamoDbRecoveryWaveStore {
                 .updateExpression("SET #reconciliationStatus = :reconciled, #reconciledAt = :now")
                 .conditionExpression(
                         "#state = :terminal AND #generation = :generation "
-                                + "AND #waveId = :waveId AND #executionStatus = :executionStatus"
+                                + "AND #waveId = :waveId AND #executionStatus = :executionStatus "
+                                + "AND attribute_not_exists(#reconciliationStatus)"
                 )
                 .expressionAttributeNames(Map.of(
                         "#state", "state",
