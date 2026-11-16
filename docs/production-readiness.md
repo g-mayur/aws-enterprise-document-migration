@@ -38,3 +38,8 @@ A checked implementation item means the capability exists in the current starter
 - [ ] Legal, privacy, residency and records-retention requirements approved.
 
 Do not describe this release as production-ready until all applicable implementation and validation gates pass and evidence is recorded.
+
+
+## Recovery reconciliation milestone
+
+The operator workflow now includes `reconcile-recovery`. It verifies the persisted Step Functions execution identity and terminal status, re-reads durable shard state, and delegates job finalization to the existing conditional coordinator. The recovery-wave slot remains unavailable for another generation until reconciliation is recorded. This is application and documentation work only; no infrastructure was deployed. A non-production AWS pilot and production monitoring/operational gates remain required.

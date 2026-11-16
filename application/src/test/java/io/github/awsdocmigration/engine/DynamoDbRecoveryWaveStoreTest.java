@@ -5,6 +5,8 @@ import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
 
@@ -45,6 +47,7 @@ class DynamoDbRecoveryWaveStoreTest {
         UpdateItemRequest captured = request.getValue();
         assertTrue(captured.conditionExpression().contains("attribute_not_exists(pk)"));
         assertTrue(captured.conditionExpression().contains("#executionStatus = :nonexistent"));
+        assertTrue(captured.conditionExpression().contains("#reconciliationStatus = :reconciled"));
         assertTrue(captured.updateExpression().contains("#executionStatus = :unknown"));
         assertEquals("ALL_NEW", captured.returnValuesAsString());
         assertEquals(List.of("2", "4", "7"),
@@ -86,7 +89,7 @@ class DynamoDbRecoveryWaveStoreTest {
     }
 
     @Test
-    void confirmedTerminalStatusReleasesSlotOnlyForCurrentOwner() {
+    void confirmedTerminalStatusKeepsSlotUntilReconciliation() {
         DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
         DynamoDbRecoveryWaveStore store = new DynamoDbRecoveryWaveStore(dynamoDb, "job-state");
         RecoveryWaveLease lease = new RecoveryWaveLease(
@@ -102,6 +105,53 @@ class DynamoDbRecoveryWaveStoreTest {
         verify(dynamoDb).updateItem(request.capture());
         assertEquals("TERMINAL",
                 request.getValue().expressionAttributeValues().get(":nextState").s());
+    }
+
+    @Test
+    void terminalWaveMustBeMarkedReconciledBeforeAnotherGenerationCanAcquire() {
+        DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
+        DynamoDbRecoveryWaveStore store = new DynamoDbRecoveryWaveStore(dynamoDb, "job-state");
+        RecoveryWaveSnapshot snapshot = new RecoveryWaveSnapshot(
+                "job-1", "wave-1", 1, "TERMINAL", "SUCCEEDED",
+                "arn:execution:1", "arn:stateMachine:1", "a".repeat(64),
+                List.of(0), NOW
+        );
+
+        assertTrue(store.markReconciled(snapshot, NOW.plusSeconds(5)));
+
+        ArgumentCaptor<UpdateItemRequest> request = ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDb).updateItem(request.capture());
+        assertTrue(request.getValue().conditionExpression().contains("#generation = :generation"));
+        assertEquals("RECONCILED",
+                request.getValue().expressionAttributeValues().get(":reconciled").s());
+    }
+
+    @Test
+    void readsWaveSnapshotConsistently() {
+        DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
+        when(dynamoDb.getItem(any(GetItemRequest.class))).thenReturn(GetItemResponse.builder()
+                .item(Map.ofEntries(
+                        Map.entry("waveId", AttributeValue.builder().s("wave-1").build()),
+                        Map.entry("generation", AttributeValue.builder().n("2").build()),
+                        Map.entry("state", AttributeValue.builder().s("TERMINAL").build()),
+                        Map.entry("executionStatus", AttributeValue.builder().s("SUCCEEDED").build()),
+                        Map.entry("executionArn", AttributeValue.builder().s("arn:execution:1").build()),
+                        Map.entry("stateMachineArn", AttributeValue.builder().s("arn:stateMachine:1").build()),
+                        Map.entry("selectedShardDigest", AttributeValue.builder().s("63cbaf561c188d36f4dbafe6d8dc1bcec36aca66073c6bfd5c9787663f4efd99").build()),
+                        Map.entry("selectedShardNumbers", AttributeValue.builder().l(List.of(
+                                AttributeValue.builder().n("0").build(),
+                                AttributeValue.builder().n("2").build())).build()),
+                        Map.entry("createdAt", AttributeValue.builder().n(Long.toString(NOW.toEpochMilli())).build())
+                )).build());
+
+        RecoveryWaveSnapshot snapshot =
+                new DynamoDbRecoveryWaveStore(dynamoDb, "job-state").get("job-1").orElseThrow();
+
+        assertEquals(List.of(0, 2), snapshot.selectedShardNumbers());
+        assertEquals("SUCCEEDED", snapshot.executionStatus());
+        ArgumentCaptor<GetItemRequest> request = ArgumentCaptor.forClass(GetItemRequest.class);
+        verify(dynamoDb).getItem(request.capture());
+        assertTrue(request.getValue().consistentRead());
     }
 
     @Test

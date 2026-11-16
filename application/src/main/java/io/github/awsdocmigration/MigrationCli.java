@@ -23,6 +23,7 @@ import io.github.awsdocmigration.engine.RecoveryWaveInputBuilder;
 import io.github.awsdocmigration.engine.DynamoDbRecoveryWaveStore;
 import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
 import io.github.awsdocmigration.engine.RecoveryWaveExecutionGuard;
+import io.github.awsdocmigration.engine.RecoveryWaveReconciliationCoordinator;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -96,6 +97,10 @@ public final class MigrationCli {
                         dynamoDb, s3, stepFunctions, arguments, region
                 );
 
+                case "reconcile-recovery" -> reconcileRecovery(
+                        dynamoDb, stepFunctions, arguments
+                );
+
                 case "migrate" -> migrate(
                         createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
@@ -105,7 +110,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, plan-recovery, dispatch-recovery, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
                 );
             }
         }
@@ -533,6 +538,44 @@ public final class MigrationCli {
                     "Recovery execution status could not be safely confirmed. The wave remains locked; "
                             + "inspect its Step Functions execution and DynamoDB recovery-wave record before retrying.");
         }
+    }
+
+    /**
+     * Re-reads the latest recovery execution and durable shard records.
+     * Finalization is attempted only after Step Functions and the durable
+     * recovery-wave record agree on the same terminal execution status.
+     */
+    private static void reconcileRecovery(
+            DynamoDbClient dynamoDb,
+            SfnClient stepFunctions,
+            Map<String, String> arguments
+    ) {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        JobStateStore jobStateStore =
+                new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+        DynamoDbRecoveryWaveStore waveStore =
+                new DynamoDbRecoveryWaveStore(dynamoDb, jobStateTable);
+
+        RecoveryWaveReconciliationCoordinator.Result result =
+                new RecoveryWaveReconciliationCoordinator(
+                        stepFunctions, waveStore, jobStateStore
+                ).reconcile(jobId, Instant.now());
+
+        System.out.printf(
+                "Recovery reconciliation. job=%s wave=%s generation=%d "
+                        + "executionStatus=%s registeredShards=%d completed=%d "
+                        + "retryable=%d active=%d blocked=%d exhausted=%d "
+                        + "jobFinalization=%s%n",
+                result.jobId(), result.waveId(), result.generation(),
+                result.executionStatus(), result.registeredShards(),
+                result.completedShards(), result.retryableShards(),
+                result.activeShards(), result.blockedShards(),
+                result.exhaustedShards(), result.finalizationStatus()
+        );
+        System.out.println(
+                "Reconciliation is read-only for shard records. Only the existing "
+                        + "conditional job-finalization transition may update the job status.");
     }
 
     private static RecoveryWavePlanner.Plan loadRecoveryPlan(

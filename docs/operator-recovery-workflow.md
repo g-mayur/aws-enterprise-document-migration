@@ -108,3 +108,18 @@ See [recovery-operator-policy.json](recovery-operator-policy.json).
 - Do not treat a terminal Step Functions status as proof that all shards are terminal.
 - CI tests use mocked AWS clients and local test fixtures. They do not prove behavior in an AWS account. Run a small non-production pilot before operational use.
 - No production data, AWS deployment, or live migration is accessed or started by CI.
+
+
+## Step 3: reconcile the terminal recovery execution
+
+After the Step Functions execution reaches a terminal status, run the reconciliation command before planning or dispatching another recovery wave:
+
+```bash
+java -jar target/document-migration-worker.jar \\
+  --mode reconcile-recovery \\
+  --job-id job-001 \\
+  --job-state-table migration-job-state \\
+  --region us-east-1
+```
+
+The command reads the execution ARN and state-machine ARN from the durable recovery-wave record, verifies the exact terminal execution with Step Functions, and re-reads every registered shard. It invokes the existing job finalizer only when all shards are terminal. The recovery-wave slot is not available for another generation until this reconciliation is recorded. See [recovery-wave-reconciliation.md](recovery-wave-reconciliation.md) for the report fields, safety gates, and failure handling.

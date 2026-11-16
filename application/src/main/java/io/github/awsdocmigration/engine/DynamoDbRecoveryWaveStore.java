@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
 
@@ -86,6 +87,7 @@ public final class DynamoDbRecoveryWaveStore {
         values.put(":timedOut", s("TIMED_OUT"));
         values.put(":aborted", s("ABORTED"));
         values.put(":nonexistent", s("NONEXISTENT"));
+        values.put(":reconciled", s("RECONCILED"));
 
         try {
             UpdateItemResponse response = dynamoDb.updateItem(UpdateItemRequest.builder()
@@ -98,13 +100,15 @@ public final class DynamoDbRecoveryWaveStore {
                                     + "#selectedShardDigest = :selectedShardDigest, "
                                     + "#executionName = :executionName, #state = :active, "
                                     + "#executionStatus = :unknown, #createdAt = :now, #updatedAt = :now "
-                                    + "REMOVE #executionArn, #stateMachineArn, #executionInputDigest"
+                                    + "REMOVE #executionArn, #stateMachineArn, #executionInputDigest, "
+                                    + "#reconciliationStatus, #reconciledAt"
                     )
                     .conditionExpression(
                             "attribute_not_exists(pk) OR "
                                     + "(#state = :terminal AND (#executionStatus = :succeeded "
                                     + "OR #executionStatus = :failed OR #executionStatus = :timedOut "
-                                    + "OR #executionStatus = :aborted OR #executionStatus = :nonexistent))"
+                                    + "OR #executionStatus = :aborted OR #executionStatus = :nonexistent) "
+                                    + "AND #reconciliationStatus = :reconciled)"
                     )
                     .expressionAttributeNames(Map.ofEntries(
                             Map.entry("#generation", "generation"),
@@ -119,7 +123,9 @@ public final class DynamoDbRecoveryWaveStore {
                             Map.entry("#updatedAt", "updatedAt"),
                             Map.entry("#executionArn", "executionArn"),
                             Map.entry("#stateMachineArn", "stateMachineArn"),
-                            Map.entry("#executionInputDigest", "executionInputDigest")
+                            Map.entry("#executionInputDigest", "executionInputDigest"),
+                            Map.entry("#reconciliationStatus", "reconciliationStatus"),
+                            Map.entry("#reconciledAt", "reconciledAt")
                     ))
                     .expressionAttributeValues(values)
                     .returnValues("ALL_NEW")
@@ -136,6 +142,47 @@ public final class DynamoDbRecoveryWaveStore {
         } catch (ConditionalCheckFailedException activeWaveExists) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Returns the latest wave using a strongly consistent read. This method
+     * never changes the lock or execution status.
+     */
+    public Optional<RecoveryWaveSnapshot> get(String jobId) {
+        requireText(jobId, "jobId");
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId))
+                .consistentRead(true)
+                .build()).item();
+        if (item == null || item.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Integer> selected = item.get("selectedShardNumbers") == null
+                || item.get("selectedShardNumbers").l() == null
+                ? List.of()
+                : item.get("selectedShardNumbers").l().stream()
+                        .map(value -> Integer.parseInt(value.n()))
+                        .toList();
+        List<Integer> normalized = normalizeShards(selected);
+        String selectedDigest = nullableText(item, "selectedShardDigest");
+        if (!digest(normalized).equals(selectedDigest)) {
+            throw new IllegalStateException(
+                    "Persisted recovery-wave shard set does not match its SHA-256 digest");
+        }
+        long createdAt = number(item, "createdAt");
+        return Optional.of(new RecoveryWaveSnapshot(
+                jobId,
+                text(item, "waveId"),
+                number(item, "generation"),
+                text(item, "state"),
+                text(item, "executionStatus"),
+                nullableText(item, "executionArn"),
+                nullableText(item, "stateMachineArn"),
+                selectedDigest,
+                normalized,
+                Instant.ofEpochMilli(createdAt)
+        ));
     }
 
     /**
@@ -263,6 +310,50 @@ public final class DynamoDbRecoveryWaveStore {
         }
     }
 
+    /**
+     * Marks a terminal wave reconciled only after the caller has re-read the
+     * complete durable shard state and attempted the guarded job finalizer.
+     * This is the gate that permits a subsequent recovery generation.
+     */
+    public boolean markReconciled(RecoveryWaveSnapshot snapshot, Instant now) {
+        Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");
+        Objects.requireNonNull(now, "Reconciliation time is required");
+        if (!"TERMINAL".equals(snapshot.state())
+                || !TERMINAL_EXECUTION_STATUSES.contains(snapshot.executionStatus())) {
+            throw new IllegalArgumentException("Only a terminal recovery wave can be reconciled");
+        }
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(snapshot.jobId()))
+                    .updateExpression("SET #reconciliationStatus = :reconciled, #reconciledAt = :now")
+                    .conditionExpression(
+                            "#state = :terminal AND #generation = :generation "
+                                    + "AND #waveId = :waveId AND #executionStatus = :executionStatus"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#state", "state",
+                            "#generation", "generation",
+                            "#waveId", "waveId",
+                            "#executionStatus", "executionStatus",
+                            "#reconciliationStatus", "reconciliationStatus",
+                            "#reconciledAt", "reconciledAt"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":terminal", s("TERMINAL"),
+                            ":generation", n(snapshot.generation()),
+                            ":waveId", s(snapshot.waveId()),
+                            ":executionStatus", s(snapshot.executionStatus()),
+                            ":reconciled", s("RECONCILED"),
+                            ":now", n(now.toEpochMilli())
+                    ))
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException staleWave) {
+            return false;
+        }
+    }
+
     private static List<Integer> normalizeShards(List<Integer> shardNumbers) {
         Objects.requireNonNull(shardNumbers, "Selected shard numbers are required");
         if (shardNumbers.isEmpty()) {
@@ -324,6 +415,16 @@ public final class DynamoDbRecoveryWaveStore {
 
     private static AttributeValue n(long value) {
         return AttributeValue.builder().n(Long.toString(value)).build();
+    }
+
+    private static String text(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        return value == null ? null : value.s();
+    }
+
+    private static String nullableText(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        return value == null ? null : value.s();
     }
 
     private static long number(Map<String, AttributeValue> item, String name) {
