@@ -13,6 +13,7 @@ This document describes the current starter implementation. A successful build d
 | Version key resolution | Implemented (starter) | Explicit latest flag required for LATEST_ONLY |
 | SHA-256 | Implemented (starter) | Streams from file/input stream |
 | S3 destination writer | Implemented (starter) | SSE-S3; single PUT for small objects and sequential multipart upload for objects above 64 MiB |
+| Multipart upload checkpoint persistence | Implemented (foundation) | Upload ID, destination contract, part sizing, metadata fingerprint and completed-part ETags can be persisted in the existing document-state item under the active lease; writer resume integration remains outstanding |
 | Multipart upload | Implemented (starter) | Bounded heap usage; one part is spooled to local temporary disk at a time; failed multipart uploads are aborted |
 | DynamoDB document-state contract | Implemented (starter) | Conditional claim and lease-owned completion/failure operations |
 | DynamoDB state repository | Implemented (starter) | Uses the existing pk/sk state table; deterministic job/shard/document keys |
