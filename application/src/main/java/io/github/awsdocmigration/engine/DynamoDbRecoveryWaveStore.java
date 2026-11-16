@@ -6,6 +6,11 @@ import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedExce
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import software.amazon.awssdk.services.dynamodb.model.Update;
+import software.amazon.awssdk.services.dynamodb.model.Put;
+import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -311,9 +316,95 @@ public final class DynamoDbRecoveryWaveStore {
     }
 
     /**
-     * Marks a terminal wave reconciled only after the caller has re-read the
-     * complete durable shard state and attempted the guarded job finalizer.
-     * This is the gate that permits a subsequent recovery generation.
+     * Atomically records the immutable reconciliation audit item and releases
+     * the current wave slot. A conditional failure means the wave identity
+     * became stale or the audit record was already written.
+     */
+    public boolean markReconciled(
+            RecoveryWaveSnapshot snapshot,
+            RecoveryReconciliationAudit audit
+    ) {
+        Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");
+        Objects.requireNonNull(audit, "Reconciliation audit is required");
+        if (!snapshot.jobId().equals(audit.jobId())
+                || !snapshot.waveId().equals(audit.waveId())
+                || snapshot.generation() != audit.generation()
+                || !snapshot.executionStatus().equals(audit.executionStatus())) {
+            throw new IllegalArgumentException("Audit identity must match the recovery wave snapshot");
+        }
+        if (!"TERMINAL".equals(snapshot.state())
+                || !TERMINAL_EXECUTION_STATUSES.contains(snapshot.executionStatus())) {
+            throw new IllegalArgumentException("Only a terminal recovery wave can be reconciled");
+        }
+
+        String auditSortKey = String.format(
+                "RECOVERY_RECONCILIATION#%020d#%013d",
+                audit.generation(), audit.reconciledAt().toEpochMilli()
+        );
+        Map<String, AttributeValue> auditItem = new HashMap<>();
+        auditItem.put("pk", s("JOB#" + audit.jobId()));
+        auditItem.put("sk", s(auditSortKey));
+        auditItem.put("recordType", s("RECOVERY_RECONCILIATION"));
+        auditItem.put("waveId", s(audit.waveId()));
+        auditItem.put("generation", n(audit.generation()));
+        auditItem.put("reconciledAt", n(audit.reconciledAt().toEpochMilli()));
+        auditItem.put("executionStatus", s(audit.executionStatus()));
+        auditItem.put("registeredShards", n(audit.registeredShards()));
+        auditItem.put("completedShards", n(audit.completedShards()));
+        auditItem.put("retryableShards", n(audit.retryableShards()));
+        auditItem.put("activeShards", n(audit.activeShards()));
+        auditItem.put("blockedShards", n(audit.blockedShards()));
+        auditItem.put("exhaustedShards", n(audit.exhaustedShards()));
+        auditItem.put("finalizationStatus", s(audit.finalizationStatus()));
+
+        Update waveUpdate = Update.builder()
+                .tableName(tableName)
+                .key(key(snapshot.jobId()))
+                .updateExpression("SET #reconciliationStatus = :reconciled, #reconciledAt = :now")
+                .conditionExpression(
+                        "#state = :terminal AND #generation = :generation "
+                                + "AND #waveId = :waveId AND #executionStatus = :executionStatus "
+                                + "AND attribute_not_exists(#reconciliationStatus)"
+                )
+                .expressionAttributeNames(Map.of(
+                        "#state", "state",
+                        "#generation", "generation",
+                        "#waveId", "waveId",
+                        "#executionStatus", "executionStatus",
+                        "#reconciliationStatus", "reconciliationStatus",
+                        "#reconciledAt", "reconciledAt"
+                ))
+                .expressionAttributeValues(Map.of(
+                        ":terminal", s("TERMINAL"),
+                        ":generation", n(snapshot.generation()),
+                        ":waveId", s(snapshot.waveId()),
+                        ":executionStatus", s(snapshot.executionStatus()),
+                        ":reconciled", s("RECONCILED"),
+                        ":now", n(audit.reconciledAt().toEpochMilli())
+                ))
+                .build();
+        Put auditPut = Put.builder()
+                .tableName(tableName)
+                .item(auditItem)
+                .conditionExpression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
+                .build();
+
+        try {
+            dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
+                    .transactItems(
+                            TransactWriteItem.builder().update(waveUpdate).build(),
+                            TransactWriteItem.builder().put(auditPut).build()
+                    )
+                    .build());
+            return true;
+        } catch (TransactionCanceledException staleOrAlreadyRecorded) {
+            return false;
+        }
+    }
+
+    /**
+     * Legacy reconciliation marker retained for compatibility with existing
+     * callers. New reconciliation flows should use the audit-bearing overload.
      */
     public boolean markReconciled(RecoveryWaveSnapshot snapshot, Instant now) {
         Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");

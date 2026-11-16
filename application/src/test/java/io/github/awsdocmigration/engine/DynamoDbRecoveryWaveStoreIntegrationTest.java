@@ -11,6 +11,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
@@ -75,6 +76,83 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
             } finally {
                 dynamoDb.close();
             }
+        }
+    }
+
+    @Test
+    void auditRecordAndWaveUnlockAreCommittedAtomically() {
+        RecoveryWaveLease lease = store.acquire(
+                "audit-job", "audit-wave", "owner", List.of(0), "execution", NOW
+        ).orElseThrow();
+        assertTrue(store.recordExecutionStatus(
+                lease, "arn:execution:audit", "SUCCEEDED", NOW.plusSeconds(1)
+        ));
+        RecoveryWaveSnapshot snapshot = store.get("audit-job").orElseThrow();
+        RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
+                "audit-job", "audit-wave", 1, NOW.plusSeconds(5), "SUCCEEDED",
+                1, 1, 0, 0, 0, 0, "COMPLETED"
+        );
+
+        assertTrue(store.markReconciled(snapshot, audit));
+        assertFalse(store.markReconciled(snapshot, audit),
+                "A second commit for the same wave must be rejected");
+
+        String auditKey = String.format("RECOVERY_RECONCILIATION#%020d#%013d",
+                audit.generation(), audit.reconciledAt().toEpochMilli());
+        var persisted = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(java.util.Map.of(
+                        "pk", software.amazon.awssdk.services.dynamodb.model.AttributeValue.builder()
+                                .s("JOB#audit-job").build(),
+                        "sk", software.amazon.awssdk.services.dynamodb.model.AttributeValue.builder()
+                                .s(auditKey).build()))
+                .consistentRead(true)
+                .build()).item();
+        assertEquals("audit-wave", persisted.get("waveId").s());
+        assertEquals("COMPLETED", persisted.get("finalizationStatus").s());
+        assertEquals("1", persisted.get("completedShards").n());
+
+        RecoveryWaveLease next = store.acquire(
+                "audit-job", "next-wave", "next-owner", List.of(0),
+                "next-execution", NOW.plusSeconds(6)
+        ).orElseThrow();
+        assertEquals(2, next.generation());
+    }
+
+    @Test
+    void concurrentReconciliationCommitsAllowOnlyOneAuditRecord() throws Exception {
+        RecoveryWaveLease lease = store.acquire(
+                "concurrent-audit-job", "wave-1", "owner", List.of(0), "execution", NOW
+        ).orElseThrow();
+        assertTrue(store.recordExecutionStatus(
+                lease, "arn:execution:concurrent", "FAILED", NOW.plusSeconds(1)
+        ));
+        RecoveryWaveSnapshot snapshot = store.get("concurrent-audit-job").orElseThrow();
+        RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
+                "concurrent-audit-job", "wave-1", 1, NOW.plusSeconds(7), "FAILED",
+                1, 0, 1, 0, 0, 0, "WAITING_FOR_SHARDS"
+        );
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> {
+                ready.countDown();
+                start.await(10, TimeUnit.SECONDS);
+                return store.markReconciled(snapshot, audit);
+            });
+            var second = executor.submit(() -> {
+                ready.countDown();
+                start.await(10, TimeUnit.SECONDS);
+                return store.markReconciled(snapshot, audit);
+            });
+            assertTrue(ready.await(10, TimeUnit.SECONDS));
+            start.countDown();
+            int committed = (first.get(20, TimeUnit.SECONDS) ? 1 : 0)
+                    + (second.get(20, TimeUnit.SECONDS) ? 1 : 0);
+            assertEquals(1, committed);
+        } finally {
+            executor.shutdownNow();
         }
     }
 

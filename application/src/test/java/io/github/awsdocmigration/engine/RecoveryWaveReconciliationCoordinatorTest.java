@@ -39,7 +39,7 @@ class RecoveryWaveReconciliationCoordinatorTest {
         DynamoDbRecoveryWaveStore waves = mock(DynamoDbRecoveryWaveStore.class);
         JobStateStore jobs = mock(JobStateStore.class);
         when(waves.get("job-1")).thenReturn(Optional.of(wave("TERMINAL", "FAILED")));
-        when(waves.markReconciled(any(), eq(NOW))).thenReturn(true);
+        when(waves.markReconciled(any(), any(RecoveryReconciliationAudit.class))).thenReturn(true);
         when(sfn.describeExecution(any(DescribeExecutionRequest.class))).thenReturn(DescribeExecutionResponse.builder()
                 .executionArn("arn:aws:states:us-east-1:123456789012:execution:flow:exec-1")
                 .stateMachineArn("arn:aws:states:us-east-1:123456789012:stateMachine:flow")

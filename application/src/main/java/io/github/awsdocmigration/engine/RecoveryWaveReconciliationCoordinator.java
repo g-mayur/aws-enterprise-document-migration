@@ -97,11 +97,6 @@ public final class RecoveryWaveReconciliationCoordinator {
         }
 
         Optional<MigrationJobState> finalized = finalizer.finalizeIfReady(jobId, inspectedAt);
-        if (!waveStore.markReconciled(wave, inspectedAt)) {
-            throw new IllegalStateException(
-                    "Recovery wave changed before reconciliation could be recorded; "
-                            + "the wave remains unavailable for another dispatch.");
-        }
         MigrationJobState latest = jobStateStore.getJob(jobId)
                 .orElseThrow(() -> new IllegalStateException("Job disappeared during reconciliation"));
 
@@ -110,20 +105,27 @@ public final class RecoveryWaveReconciliationCoordinator {
                         ? "WAITING_FOR_SHARDS"
                         : "NOT_READY_" + latest.status().name());
 
+        int completed = count(counts, ShardRecoveryInspector.Disposition.COMPLETED);
+        int retryable = count(counts, ShardRecoveryInspector.Disposition.READY_TO_DISPATCH)
+                + count(counts, ShardRecoveryInspector.Disposition.RETRYABLE_FAILURE)
+                + count(counts, ShardRecoveryInspector.Disposition.RECLAIMABLE_EXPIRED_LEASE);
+        int active = count(counts, ShardRecoveryInspector.Disposition.WAIT_FOR_ACTIVE_LEASE);
+        int blocked = count(counts, ShardRecoveryInspector.Disposition.LEASE_EXPIRY_UNKNOWN);
+        int exhausted = count(counts, ShardRecoveryInspector.Disposition.ATTEMPTS_EXHAUSTED);
+
+        RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
+                jobId, wave.waveId(), wave.generation(), inspectedAt, observedStatus,
+                shards.size(), completed, retryable, active, blocked, exhausted, finalization
+        );
+        if (!waveStore.markReconciled(wave, audit)) {
+            throw new IllegalStateException(
+                    "Recovery wave changed or another reconciliation completed first; "
+                            + "the audit transaction was not committed.");
+        }
+
         return new Result(
-                jobId,
-                wave.waveId(),
-                wave.generation(),
-                observedStatus,
-                shards.size(),
-                count(counts, ShardRecoveryInspector.Disposition.COMPLETED),
-                count(counts, ShardRecoveryInspector.Disposition.READY_TO_DISPATCH)
-                        + count(counts, ShardRecoveryInspector.Disposition.RETRYABLE_FAILURE)
-                        + count(counts, ShardRecoveryInspector.Disposition.RECLAIMABLE_EXPIRED_LEASE),
-                count(counts, ShardRecoveryInspector.Disposition.WAIT_FOR_ACTIVE_LEASE),
-                count(counts, ShardRecoveryInspector.Disposition.LEASE_EXPIRY_UNKNOWN),
-                count(counts, ShardRecoveryInspector.Disposition.ATTEMPTS_EXHAUSTED),
-                finalization
+                jobId, wave.waveId(), wave.generation(), observedStatus,
+                shards.size(), completed, retryable, active, blocked, exhausted, finalization
         );
     }
 
