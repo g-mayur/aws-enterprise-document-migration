@@ -1,7 +1,6 @@
 package io.github.awsdocmigration.storage;
 
 import io.github.awsdocmigration.domain.DocumentRecord;
-import io.github.awsdocmigration.engine.MultipartUploadContext;
 
 import java.io.InputStream;
 
