@@ -5,6 +5,7 @@ A checked implementation item means the capability exists in the current starter
 ## Implementation present; target-environment validation still required
 
 - [x] Sequential multipart upload implemented for large objects; production integration and load validation remain required.
+- [x] Durable multipart checkpoint model and lease-fenced DynamoDB persistence implemented in the existing document-state table; S3 writer resume integration remains outstanding.
 - [x] DynamoDB conditional document claims, lease expiry/reclamation, attempt limits and lease-owned state transitions implemented as a repository foundation.
 - [x] Sharded migration CLI integrated with durable document state, shard leases, deterministic assignment and job finalization; end-to-end pilot validation remains required.
 - [x] Worker identity, shard/document lease renewal and fencing implemented; long-running and interrupted-worker behavior must still be exercised in the target environment.
