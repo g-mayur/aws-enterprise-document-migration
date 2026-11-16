@@ -2,12 +2,12 @@
 
 ## Scope and safety
 
-The CLI provides operator-driven recovery planning, dispatch, and reconciliation, plus `configure-recovery` to bind immutable execution settings to a prepared job:
+The CLI provides read-only planning, explicitly confirmed single-wave dispatch, audit-backed reconciliation, and an explicitly invoked bounded controller, plus `configure-recovery` to bind immutable execution settings to a prepared job:
 
 - `configure-recovery`: validates the S3 manifest fingerprint and Standard state machine, then conditionally stores the immutable recovery configuration for a `READY` job.
 - `plan-recovery`: read-only validation and shard eligibility report.
 - `dispatch-recovery`: starts one recovery wave only after explicit operator confirmation.
-- `reconcile-recovery`: verifies the terminal execution and commits the durable reconciliation audit.
+- `reconcile-recovery`: verifies the terminal execution and commits the durable reconciliation audit.\n- `auto-recover`: runs a finite sequence of dispatch, exact-execution polling, reconciliation, and fresh planning passes under explicit wave and runtime ceilings.
 
 The workflow validates the prepared job, exact manifest SHA-256 fingerprint, source bucket and prefix recorded by the S3 manifest, and complete contiguous shard registration. It selects only shards classified as pending, retryable failures, or running with an expired lease and remaining shard claims.
 
@@ -125,7 +125,7 @@ See [recovery-operator-policy.json](recovery-operator-policy.json).
 - Source bucket and prefix are verified against the manifest. Destination bucket and version policy are stored in the immutable recovery configuration because they are not stored in the prepared job.
 - The exact manifest is re-verified by workers before they claim shards. If the S3 object changes after planning, workers reject the changed fingerprint.
 - A recovery wave starting successfully does not prove any shard was claimed or migrated.
-- This milestone does not automatically re-read shard state or invoke the existing job finalization coordinator after the execution. Reconcile the durable job and shard state manually after the execution; the next milestone will automate this integration.
+- The `auto-recover` mode observes the exact persisted execution ARN, writes only status observations fenced by wave generation and identity, and invokes the existing audit-backed reconciliation before another plan. If execution identity/status is ambiguous or the runtime expires, it stops and leaves the wave locked.
 - Do not treat a terminal Step Functions status as proof that all shards are terminal.
 - CI tests use mocked AWS clients and local test fixtures. They do not prove behavior in an AWS account. Run a small non-production pilot before operational use.
 - No production data, AWS deployment, or live migration is accessed or started by CI.
@@ -145,7 +145,30 @@ java -jar target/document-migration-worker.jar \\
 
 The command reads the execution ARN and state-machine ARN from the durable recovery-wave record, verifies the exact terminal execution with Step Functions, and re-reads every registered shard. It invokes the existing job finalizer only when all shards are terminal. The recovery-wave slot is not available for another generation until this reconciliation is recorded. See [recovery-wave-reconciliation.md](recovery-wave-reconciliation.md) for the report fields, safety gates, and failure handling. The final wave unlock and an immutable per-generation audit item are committed in one DynamoDB transaction. The audit item records the execution status, shard disposition counts, reconciliation time, and job finalization result. If the process stops before that transaction commits, the wave remains unreconciled and the command can be safely retried. Concurrent attempts are fenced so only one can commit the audit and unlock.
 
-## Automatic recovery is not enabled
+## Step 4: run the bounded controller (explicit opt-in)
+
+The controller is a foreground CLI operation, not a scheduler or background service. It still requires the same explicit confirmations as a single-wave dispatch and applies hard limits to the number of waves, polling interval, and total runtime:
+
+```bash
+java -jar target/document-migration-worker.jar \
+  --mode auto-recover \
+  --confirm-recovery true \
+  --confirm-prior-execution-terminal true \
+  --job-id job-001 \
+  --job-state-table migration-job-state \
+  --max-waves 3 \
+  --poll-interval-seconds 5 \
+  --max-runtime-seconds 900 \
+  --region us-east-1
+```
+
+Bounds are enforced by the CLI: 1–10 waves, 1–30 seconds between polls, and 30–3600 seconds total runtime. Each wave uses the persisted immutable configuration and existing job-scoped lock. The controller waits on the exact execution ARN stored for that wave, persists status only when the wave generation, ID, and ARN still match, then performs audit-backed reconciliation before generating a fresh plan.
+
+The controller stops when the job is terminal, no eligible shards remain, active leases or unknown lease expiry are present, the wave ceiling or runtime ceiling is reached, or an execution identity/status cannot be verified. A timeout, AWS API error, or ambiguous execution leaves the current wave locked for manual inspection; do not clear the lock or start another wave. Exhausted shards are never reset or replayed.
+
+This is not permission to schedule unattended production recovery. Validate the controller with DynamoDB Local tests and a controlled non-production AWS pilot before considering any scheduled use.
+
+## Operational enablement remains gated\n\n
 
 The current commands remain operator-driven: plan-recovery, dispatch-recovery, and reconcile-recovery. Do not schedule or loop these commands unattended.
 
