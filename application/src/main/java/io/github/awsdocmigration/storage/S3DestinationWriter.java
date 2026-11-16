@@ -180,8 +180,16 @@ public final class S3DestinationWriter implements DestinationWriter {
                 if (compatible) {
                     uploadId = candidate.uploadId();
                     try {
-                        for (CompletedPart part : listRemoteParts(key, uploadId)) {
-                            remoteEtags.put(part.partNumber(), part.eTag());
+                        List<Part> remoteParts = listRemoteParts(key, uploadId);
+                        if (!areRemotePartsCompatible(remoteParts, contentLength, partSize)) {
+                            abortExistingUpload(bucket, key, uploadId);
+                            requireCheckpointClear(context);
+                            uploadId = null;
+                            remoteEtags.clear();
+                        } else {
+                            for (Part part : remoteParts) {
+                                remoteEtags.put(part.partNumber(), part.eTag());
+                            }
                         }
                     } catch (S3Exception failure) {
                         String code = failure.awsErrorDetails() == null
@@ -297,8 +305,8 @@ public final class S3DestinationWriter implements DestinationWriter {
         }
     }
 
-    private List<CompletedPart> listRemoteParts(String key, String uploadId) {
-        List<CompletedPart> result = new ArrayList<>();
+    private List<Part> listRemoteParts(String key, String uploadId) {
+        List<Part> result = new ArrayList<>();
         Integer marker = null;
         boolean truncated;
         do {
@@ -306,16 +314,40 @@ public final class S3DestinationWriter implements DestinationWriter {
                     .bucket(bucket).key(key).uploadId(uploadId);
             if (marker != null) builder.partNumberMarker(marker);
             ListPartsResponse response = s3.listParts(builder.build());
-            for (Part part : response.parts()) {
-                if (part.eTag() != null && !part.eTag().isBlank()) {
-                    result.add(CompletedPart.builder().partNumber(part.partNumber())
-                            .eTag(part.eTag()).build());
-                }
-            }
+            result.addAll(response.parts());
             truncated = Boolean.TRUE.equals(response.isTruncated());
-            marker = response.nextPartNumberMarker();
+            Integer nextMarker = response.nextPartNumberMarker();
+            if (truncated && (nextMarker == null
+                    || nextMarker <= (marker == null ? 0 : marker))) {
+                throw new IllegalStateException(
+                        "S3 ListParts returned a truncated page without an advancing part-number marker");
+            }
+            marker = nextMarker;
         } while (truncated);
         return result;
+    }
+
+    private static boolean areRemotePartsCompatible(
+            List<Part> parts, long contentLength, long partSize) {
+        long expectedPartCount = (contentLength + partSize - 1) / partSize;
+        Map<Integer, Boolean> seen = new TreeMap<>();
+        for (Part part : parts) {
+            Integer partNumber = part.partNumber();
+            Long partLength = part.size();
+            if (partNumber == null || partNumber < 1
+                    || partNumber > expectedPartCount
+                    || partLength == null
+                    || part.eTag() == null || part.eTag().isBlank()
+                    || seen.put(partNumber, Boolean.TRUE) != null) {
+                return false;
+            }
+            long expectedLength = Math.min(
+                    partSize, contentLength - ((long) partNumber - 1) * partSize);
+            if (partLength != expectedLength) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void requireCheckpointSave(
