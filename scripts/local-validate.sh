@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/application"
-DYNAMODB_CONTAINER_NAME="aws-doc-migration-dynamodb-local"
+DYNAMODB_CONTAINER_NAME="aws-doc-migration-dynamodb-local-$$"
 STARTED_DYNAMODB_CONTAINER=""
 
 cleanup() {
@@ -25,6 +25,16 @@ JAVA_VERSION="$(java -version 2>&1 | awk -F '[".]' '/version/ { print $2; exit }
 [[ "$JAVA_VERSION" =~ ^[0-9]+$ ]] || fail "Could not determine the installed Java version."
 (( JAVA_VERSION >= 17 )) || fail "Java 17 or newer is required; detected Java $JAVA_VERSION."
 
+MAVEN_VERSION="$(mvn --version 2>&1 | awk '/Apache Maven/ { print $3; exit }')"
+[[ "$MAVEN_VERSION" =~ ^[0-9]+\.[0-9]+([.-].*)?$ ]] || fail "Could not determine the installed Maven version."
+MAVEN_MAJOR="${MAVEN_VERSION%%.*}"
+MAVEN_REMAINDER="${MAVEN_VERSION#*.}"
+MAVEN_MINOR="${MAVEN_REMAINDER%%.*}"
+if (( MAVEN_MAJOR < 3 || (MAVEN_MAJOR == 3 && MAVEN_MINOR < 9) )); then
+  fail "Maven 3.9 or newer is required; detected Maven $MAVEN_VERSION."
+fi
+
+printf 'Using Java %s and Maven %s.\n' "$JAVA_VERSION" "$MAVEN_VERSION"
 printf '\n==> Running Maven clean verify\n'
 if [[ -n "${DYNAMODB_LOCAL_ENDPOINT:-}" ]]; then
   printf 'Using supplied DYNAMODB_LOCAL_ENDPOINT: %s\n' "$DYNAMODB_LOCAL_ENDPOINT"
