@@ -34,3 +34,6 @@ This document describes the current starter implementation. A successful build d
 | Production monitoring/alarms | Not implemented | Define SLOs, metrics and dashboards |
 
 Do not describe this release as production-ready until all relevant production-readiness gates pass.
+
+
+| Bounded automatic recovery orchestration | Not implemented | Design contract defined; operator-triggered plan, dispatch, and audit-backed reconciliation remain the supported workflow. Immutable job recovery configuration and a finite, fail-closed controller are prerequisites. |
