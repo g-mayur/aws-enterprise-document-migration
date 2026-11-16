@@ -18,9 +18,20 @@ jobs:
         image: amazon/dynamodb-local:2.5.2
         ports:
           - 8000:8000
+      s3-localstack:
+        image: localstack/localstack:3.8.1
+        env:
+          SERVICES: s3
+          DEFAULT_REGION: us-east-1
+        ports:
+          - 4566:4566
 
     env:
       DYNAMODB_LOCAL_ENDPOINT: http://localhost:8000
+      S3_INTEGRATION_ENDPOINT_URL: http://localhost:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
 
     steps:
       - name: Checkout repository

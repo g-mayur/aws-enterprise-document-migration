@@ -1,16 +1,16 @@
 # Local development and validation
 
-This guide covers cloning the repository, building the Java application and running its automated tests. These steps do **not** require an AWS account, AWS CLI, AWS credentials, an S3 bucket or deployed infrastructure.
+This guide covers cloning the repository, building the Java application and running its automated tests. The default steps do **not** require an AWS account, AWS CLI, AWS credentials, an S3 bucket or deployed infrastructure.
 
 ## Prerequisites
 
 - Git
 - JDK 17 or newer
 - Apache Maven 3.9 or newer
-- Docker Desktop or Docker Engine (recommended for DynamoDB integration tests)
+- Docker Desktop or Docker Engine (recommended for DynamoDB and S3 integration tests)
 - Terraform (optional; used only for the infrastructure formatting check)
 
-The application is built for Java 17. The Java Build and Validation CI workflow runs this same repository validation script with Temurin 17 and a DynamoDB Local service.
+The application is built for Java 17. The Java Build and Validation CI workflow runs this same repository validation script with Temurin 17, DynamoDB Local and LocalStack's S3 service.
 
 ## Clone and validate
 
@@ -33,25 +33,50 @@ The script:
 4. Runs `mvn --batch-mode clean verify` for the application.
 5. Runs recursive Terraform formatting validation when Terraform is installed.
 
-If Docker is unavailable, Maven tests still run, but the DynamoDB integration tests that require `DYNAMODB_LOCAL_ENDPOINT` are skipped by their JUnit assumptions. To run those integration tests, install/start Docker or point `DYNAMODB_LOCAL_ENDPOINT` at a disposable DynamoDB Local instance.
-
-The default local DynamoDB endpoint is `http://127.0.0.1:8000`. If that port is already occupied by another service, stop that service or configure a separate DynamoDB Local instance and set `DYNAMODB_LOCAL_ENDPOINT` accordingly. The script never removes a container it did not create.
+If Docker is unavailable, Maven tests still run, but the DynamoDB and S3 integration tests that require their respective endpoints are skipped by JUnit assumptions. To run those integration tests, start the local services and set their endpoint variables.
 
 ## Run Maven directly
 
-For a Java build and test run without starting local DynamoDB:
+For a Java build and test run without starting local services:
 
 ```bash
 mvn --batch-mode clean verify -f application/pom.xml
 ```
 
-DynamoDB integration tests are skipped unless `DYNAMODB_LOCAL_ENDPOINT` is configured. This is expected; unit tests still execute.
+DynamoDB and S3 integration tests are skipped unless their endpoint variables are configured. Unit tests still execute.
+
+## S3 API integration test with LocalStack
+
+The Maven test suite includes `S3ApiIntegrationTest`. It uses the production `S3ClientFactory` and `S3DestinationWriter` against a real S3-compatible HTTP API. It creates a temporary bucket, uploads a document, checks its server-side encryption and metadata through `HeadObject`, downloads it through `GetObject`, verifies the bytes, and removes the test object and bucket.
+
+Start LocalStack with only its S3 service enabled:
+
+```bash
+docker run --detach --rm --name aws-doc-migration-localstack \
+  -p 4566:4566 \
+  -e SERVICES=s3 \
+  -e DEFAULT_REGION=us-east-1 \
+  localstack/localstack:3.8.1
+```
+
+Configure dummy credentials and the local endpoint, then run Maven:
+
+```bash
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_REGION=us-east-1
+export S3_INTEGRATION_ENDPOINT_URL=http://localhost:4566
+
+mvn --batch-mode clean verify -f application/pom.xml
+```
+
+These credentials are local placeholders only. The test uses the endpoint supplied by `S3_INTEGRATION_ENDPOINT_URL`; it does not contact AWS. The GitHub Actions Java validation job starts the same pinned LocalStack image and sets these variables automatically.
 
 ## AWS-free migration-flow integration test
 
-The Maven test suite includes `LocalFilesystemMigrationFlowIntegrationTest`. It creates real files in a temporary directory, discovers them through `FilesystemSource`, writes and reads a JSONL manifest, then runs each document through the migration verification and destination-key logic. A test-only in-memory destination captures the uploaded bytes and SHA-256 values so the test can verify content integrity without contacting AWS.
+The Maven test suite also includes `LocalFilesystemMigrationFlowIntegrationTest`. It creates real files in a temporary directory, discovers them through `FilesystemSource`, writes and reads a JSONL manifest, then runs each document through the migration verification and destination-key logic. A test-only in-memory destination captures the uploaded bytes and SHA-256 values so the test can verify content integrity without contacting AWS.
 
-This test exercises the local source-to-destination migration flow, but it does **not** invoke the production S3 API, validate an S3-compatible service, or exercise the full command-line `migrate` entry point. The CLI now supports an optional `S3_ENDPOINT_URL` override for S3, but a real S3 API integration test against a local service remains a separate future milestone. The in-memory destination is a test fixture, not a production storage implementation.
+This filesystem test exercises the local source-to-destination migration flow, but it does not invoke the production S3 API or exercise the full command-line `migrate` entry point. The separate `S3ApiIntegrationTest` covers actual S3 API calls for the production S3 destination writer.
 
 ## Optional S3-compatible endpoint
 
@@ -65,11 +90,11 @@ export S3_ENDPOINT_URL=http://localhost:4566
 
 Use only a local or otherwise explicitly trusted endpoint for development. Do not include credentials, query parameters or paths in the endpoint URL. The endpoint must be an absolute HTTP or HTTPS URL containing a host.
 
-When `S3_ENDPOINT_URL` is unset or blank, the SDK's standard AWS S3 endpoint resolution is unchanged. The override applies only to S3; DynamoDB and Step Functions clients continue to use their normal AWS endpoint resolution. This setting alone does not provision or start an S3-compatible service, create buckets, or make the full migration workflow AWS-free. The S3 API integration test against a local service is a separate validation step.
+When `S3_ENDPOINT_URL` is unset or blank, the SDK's standard AWS S3 endpoint resolution is unchanged. The override applies only to S3; DynamoDB and Step Functions clients continue to use their normal AWS endpoint resolution. This setting alone does not provision or start an S3-compatible service, create buckets, or make the full migration workflow AWS-free.
 
 ## AWS credentials are not needed for local tests
 
-The DynamoDB integration tests use local endpoint configuration and dummy local credentials. They do not connect to AWS. Do not add real access keys, session tokens, customer data, production manifests or Terraform state to the repository.
+The DynamoDB integration tests use local endpoint configuration and dummy local credentials. The S3 API integration test uses LocalStack and dummy local credentials when `S3_INTEGRATION_ENDPOINT_URL` is configured. Neither test should connect to AWS. Do not add real access keys, session tokens, customer data, production manifests or Terraform state to the repository.
 
 ## Configure AWS credentials only when preparing to use AWS
 
@@ -94,12 +119,13 @@ If you do not have an AWS account or an approved role, stop after local validati
 |---|---|
 | `java: command not found` or Java version below 17 | Install a JDK 17+ and confirm `java -version` and `JAVA_HOME` point to it |
 | `mvn: command not found` or Maven version below 3.9 | Install Maven 3.9+ and confirm `mvn -version` |
-| Docker daemon unavailable | Start Docker Desktop/Engine; otherwise run Maven directly and note that DynamoDB integration tests are skipped |
+| Docker daemon unavailable | Start Docker Desktop/Engine; otherwise run Maven directly and note that local-service integration tests are skipped |
 | Port 8000 is already in use | Stop the conflicting service or configure a separate DynamoDB Local endpoint and export `DYNAMODB_LOCAL_ENDPOINT` |
+| S3 integration test is skipped | Start LocalStack and export `S3_INTEGRATION_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` |
 | DynamoDB integration tests cannot connect | Confirm the endpoint is reachable and DynamoDB Local is ready before running Maven |
 | Terraform formatting check is skipped | Install Terraform and ensure it is available on `PATH` |
 | AWS CLI reports missing credentials | Local tests do not need AWS credentials; for AWS operations, use an administrator-approved IAM Identity Center profile or workload role |
 
 ## What local validation does not prove
 
-A successful local build does not prove that an AWS deployment, IAM policy, S3 transfer, Step Functions workflow, service quota, network path, throughput target or production recovery procedure works in your account. Those require a separately approved non-production AWS pilot. See [Production readiness](production-readiness.md) and [Deployment validation](deployment-validation.md).
+A successful local build does not prove that an AWS deployment, IAM policy, S3 transfer against AWS, Step Functions workflow, service quota, network path, throughput target or production recovery procedure works in your account. Those require a separately approved non-production AWS pilot. See [Production readiness](production-readiness.md) and [Deployment validation](deployment-validation.md).
