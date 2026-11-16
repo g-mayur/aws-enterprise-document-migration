@@ -24,6 +24,17 @@ public record MigrationShardState(
     public MigrationShardState(
             String jobId, int shardNumber, MigrationShardStatus status,
             String workerId, String lastError, int attemptCount,
+            long createdAtEpochMillis, long updatedAtEpochMillis,
+            String reviewedBy, String reviewNote, Long reviewedAtEpochMillis
+    ) {
+        this(jobId, shardNumber, status, workerId, lastError, attemptCount,
+                createdAtEpochMillis, updatedAtEpochMillis, null,
+                reviewedBy, reviewNote, reviewedAtEpochMillis);
+    }
+
+    public MigrationShardState(
+            String jobId, int shardNumber, MigrationShardStatus status,
+            String workerId, String lastError, int attemptCount,
             long createdAtEpochMillis, long updatedAtEpochMillis
     ) {
         this(jobId, shardNumber, status, workerId, lastError, attemptCount,
