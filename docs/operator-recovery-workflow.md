@@ -23,9 +23,10 @@ The job record stores the immutable manifest fingerprint and shard plan, but it 
 - Document-state DynamoDB table.
 - Destination S3 bucket.
 - Version policy used for this migration.
+- Worker lease duration and document-attempt limit used for this migration.
 - Standard Step Functions state machine ARN for dispatch.
 
-The destination bucket and version policy cannot be verified against the prepared job because they are not persisted in its record. Confirm they match the original migration configuration before dispatch. The worker still verifies the prepared manifest fingerprint before claiming its shard.
+The destination bucket, version policy, lease duration and document-attempt limit cannot be verified against the prepared job because they are not persisted in its record. Supply the original values explicitly and confirm they match the original migration configuration before dispatch. The worker still verifies the prepared manifest fingerprint before claiming its shard.
 
 The manifest must be an S3-source manifest with an explicit immutable source version or snapshot identity for each record. Legacy records without this identity are rejected.
 
@@ -66,6 +67,8 @@ java -jar target/document-migration-worker.jar \
   --source-prefix "exports/" \
   --destination-bucket destination-bucket \
   --version-policy ALL_VERSIONS \
+  --lease-seconds 300 \
+  --max-attempts 5 \
   --state-machine-arn arn:aws:states:us-east-1:123456789012:stateMachine:document-migration-shard-orchestration \
   --region us-east-1
 ```
