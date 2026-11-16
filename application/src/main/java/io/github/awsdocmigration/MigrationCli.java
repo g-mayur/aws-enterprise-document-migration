@@ -18,6 +18,10 @@ import io.github.awsdocmigration.engine.ManifestFingerprint;
 import io.github.awsdocmigration.engine.MigrationJobState;
 import io.github.awsdocmigration.engine.ShardExecutionCoordinator;
 import io.github.awsdocmigration.engine.ShardRecoveryInspector;
+import io.github.awsdocmigration.engine.RecoveryWavePlanner;
+import io.github.awsdocmigration.engine.RecoveryWaveInputBuilder;
+import io.github.awsdocmigration.engine.DynamoDbRecoveryWaveStore;
+import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -27,6 +31,9 @@ import io.github.awsdocmigration.util.Checksums;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.sfn.SfnClient;
+import software.amazon.awssdk.services.sfn.model.DescribeStateMachineRequest;
+import software.amazon.awssdk.services.sfn.model.StateMachineType;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.core.sync.ResponseTransformer;
 
@@ -65,6 +72,9 @@ public final class MigrationCli {
                         .build();
                 DynamoDbClient dynamoDb = DynamoDbClient.builder()
                         .region(Region.of(region))
+                        .build();
+                SfnClient stepFunctions = SfnClient.builder()
+                        .region(Region.of(region))
                         .build()
         ) {
 
@@ -79,6 +89,12 @@ public final class MigrationCli {
 
                 case "inspect-job" -> inspectJob(dynamoDb, arguments);
 
+                case "plan-recovery" -> planRecovery(dynamoDb, s3, arguments);
+
+                case "dispatch-recovery" -> dispatchRecovery(
+                        dynamoDb, s3, stepFunctions, arguments, region
+                );
+
                 case "migrate" -> migrate(
                         createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
@@ -88,7 +104,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, plan-recovery, dispatch-recovery, migrate"
                 );
             }
         }
@@ -406,6 +422,164 @@ public final class MigrationCli {
                 });
 
         System.out.println("Inspection only: no shard was claimed or modified.");
+    }
+
+    /**
+     * Prints a read-only recovery plan. The operation reads the exact S3
+     * manifest and consistent DynamoDB job/shard state but does not acquire a
+     * recovery wave or call Step Functions.
+     */
+    private static void planRecovery(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            Map<String, String> arguments
+    ) throws Exception {
+        RecoveryWavePlanner.Plan plan = loadRecoveryPlan(dynamoDb, s3, arguments);
+        printRecoveryPlan(plan);
+        System.out.println("Plan only: no recovery wave was acquired and no execution was started.");
+    }
+
+    /**
+     * Starts one explicitly confirmed recovery wave. All validation completes
+     * before the durable wave slot is acquired or Step Functions is called.
+     */
+    private static void dispatchRecovery(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            SfnClient stepFunctions,
+            Map<String, String> arguments,
+            String region
+    ) throws Exception {
+        validateRecoveryConfirmation(arguments);
+        RecoveryWavePlanner.Plan plan = loadRecoveryPlan(dynamoDb, s3, arguments);
+        printRecoveryPlan(plan);
+        if (plan.selectedShardNumbers().isEmpty()) {
+            throw new IllegalStateException("No shards are currently eligible for recovery; nothing was dispatched.");
+        }
+
+        String stateMachineArn = required(arguments, "state-machine-arn");
+        var stateMachine = stepFunctions.describeStateMachine(
+                DescribeStateMachineRequest.builder().stateMachineArn(stateMachineArn).build());
+        if (stateMachine.type() != StateMachineType.STANDARD) {
+            throw new IllegalStateException(
+                    "Recovery dispatch requires a Standard Step Functions state machine.");
+        }
+
+        String sourceBucket = required(arguments, "source-bucket");
+        String sourcePrefix = requiredPresent(arguments, "source-prefix");
+        String destinationBucket = required(arguments, "destination-bucket");
+        String manifestS3Uri = required(arguments, "manifest-s3-uri");
+        String documentStateTable = required(arguments, "state-table");
+        String jobStateTable = required(arguments, "job-state-table");
+        VersionPolicy versionPolicy = VersionPolicy.valueOf(required(arguments, "version-policy"));
+        int leaseSeconds = parsePositiveInt(
+                arguments.getOrDefault("lease-seconds", "300"), "lease-seconds");
+        if (leaseSeconds < 3) {
+            throw new IllegalArgumentException("--lease-seconds must be at least 3");
+        }
+        int maximumDocumentAttempts = parsePositiveInt(
+                arguments.getOrDefault("max-attempts", "5"), "max-attempts");
+
+        String waveId = UUID.randomUUID().toString();
+        String ownerToken = UUID.randomUUID().toString();
+        Instant now = Instant.now();
+        String exactInput = RecoveryWaveInputBuilder.build(
+                plan.job().jobId(),
+                sourceBucket,
+                sourcePrefix,
+                destinationBucket,
+                manifestS3Uri,
+                plan.job().totalShards(),
+                plan.selectedShardNumbers(),
+                documentStateTable,
+                jobStateTable,
+                versionPolicy,
+                region,
+                leaseSeconds,
+                maximumDocumentAttempts,
+                waveId
+        );
+
+        DynamoDbRecoveryWaveStore waveStore =
+                new DynamoDbRecoveryWaveStore(dynamoDb, jobStateTable);
+        var lease = waveStore.acquire(
+                plan.job().jobId(),
+                waveId,
+                ownerToken,
+                plan.selectedShardNumbers(),
+                "recovery-" + plan.job().jobId(),
+                now
+        ).orElseThrow(() -> new IllegalStateException(
+                "A recovery wave is already active for this job. No new execution was started."));
+
+        StepFunctionsRecoveryWaveDispatcher.Result result =
+                new StepFunctionsRecoveryWaveDispatcher(stepFunctions, waveStore)
+                        .dispatch(lease, stateMachineArn, exactInput, Instant.now());
+
+        System.out.printf(
+                "Recovery dispatch result. job=%s wave=%s generation=%d outcome=%s "
+                        + "executionStatus=%s executionArn=%s%n",
+                lease.jobId(), lease.waveId(), lease.generation(), result.outcome(),
+                result.executionStatus(), result.executionArn() == null ? "unknown" : result.executionArn()
+        );
+
+        if (result.outcome() == StepFunctionsRecoveryWaveDispatcher.Outcome.UNKNOWN
+                || result.outcome() == StepFunctionsRecoveryWaveDispatcher.Outcome.INPUT_MISMATCH
+                || result.outcome() == StepFunctionsRecoveryWaveDispatcher.Outcome.STALE_OWNER) {
+            throw new IllegalStateException(
+                    "Recovery execution status could not be safely confirmed. The wave remains locked; "
+                            + "inspect its Step Functions execution and DynamoDB recovery-wave record before retrying.");
+        }
+    }
+
+    private static RecoveryWavePlanner.Plan loadRecoveryPlan(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            Map<String, String> arguments
+    ) throws Exception {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        String manifestS3Uri = required(arguments, "manifest-s3-uri");
+        String sourceBucket = required(arguments, "source-bucket");
+        String sourcePrefix = requiredPresent(arguments, "source-prefix");
+        Path manifestPath = resolveManifestPath(
+                s3, Map.of("manifest-s3-uri", manifestS3Uri));
+        try {
+            JobStateStore jobStateStore = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+            return new RecoveryWavePlanner(jobStateStore).plan(
+                    jobId, manifestPath, sourceBucket, sourcePrefix, Instant.now());
+        } finally {
+            Files.deleteIfExists(manifestPath);
+        }
+    }
+
+    private static void printRecoveryPlan(RecoveryWavePlanner.Plan plan) {
+        System.out.printf(
+                "Recovery plan. job=%s status=%s totalShards=%d manifestSha256=%s "
+                        + "eligibleShards=%s inspectedAt=%s%n",
+                plan.job().jobId(), plan.job().status(), plan.job().totalShards(),
+                plan.manifestFingerprint(), plan.selectedShardNumbers(), plan.inspectedAt());
+        System.out.println("shard,status,attempts,assessment");
+        for (var shard : plan.shards()) {
+            System.out.printf("%d,%s,%d,%s%n",
+                    shard.shardNumber(), shard.status(), shard.attemptCount(),
+                    plan.assessments().get(shard.shardNumber()));
+        }
+    }
+
+    static void validateRecoveryConfirmation(Map<String, String> arguments) {
+        if (!"true".equalsIgnoreCase(arguments.get("confirm-recovery"))) {
+            throw new IllegalArgumentException(
+                    "Dispatch requires explicit --confirm-recovery true. Run --mode plan-recovery first.");
+        }
+    }
+
+    private static String requiredPresent(Map<String, String> arguments, String key) {
+        if (!arguments.containsKey(key) || arguments.get(key) == null) {
+            throw new IllegalArgumentException(
+                    "Missing --" + key + " (use an empty value when the S3 bucket root is intended)");
+        }
+        return arguments.get(key);
     }
 
     private static String csv(String value) {
