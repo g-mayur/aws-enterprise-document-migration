@@ -12,7 +12,7 @@ A source-agnostic, extensible boilerplate for migrating documents, metadata and 
 - Deterministic destination-key strategy for LATEST_ONLY and ALL_VERSIONS.
 - Streaming SHA-256 utility and S3 destination writer using SSE-S3, with bounded-memory sequential multipart uploads for large objects.
 - Terraform foundation for encrypted S3 buckets, DynamoDB state tables and ECS/Fargate execution primitives.
-- Immutable per-job recovery configuration stored conditionally in DynamoDB after prepared-manifest and source validation; operator-triggered recovery dispatch reads these persisted settings rather than accepting execution-setting overrides.
+- Immutable per-job recovery configuration stored conditionally in DynamoDB after prepared-manifest and source validation; recovery dispatch and the bounded foreground controller read these persisted settings rather than accepting execution-setting overrides. The controller requires explicit confirmation, enforces wave/runtime ceilings, and reconciles each exact execution before considering another wave.
 - Separate AWS environment bootstrap for a private VPC, VPC endpoints, worker security group and immutable ECR repository.
 - Docker build, GitHub Actions checks, operational documentation and examples.
 
