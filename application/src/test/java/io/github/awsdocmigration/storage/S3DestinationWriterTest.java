@@ -365,8 +365,10 @@ class S3DestinationWriterTest {
         writer.write(record(content.length), KEY,
                 new ByteArrayInputStream(content), SHA256, context);
 
-        verify(s3).abortMultipartUpload(argThat(request ->
-                "upload-stale".equals(request.uploadId())));
+        ArgumentCaptor<AbortMultipartUploadRequest> abortCaptor =
+                ArgumentCaptor.forClass(AbortMultipartUploadRequest.class);
+        verify(s3).abortMultipartUpload(abortCaptor.capture());
+        assertEquals("upload-stale", abortCaptor.getValue().uploadId());
         verify(s3).createMultipartUpload(any(CreateMultipartUploadRequest.class));
         ArgumentCaptor<UploadPartRequest> partCaptor =
                 ArgumentCaptor.forClass(UploadPartRequest.class);
