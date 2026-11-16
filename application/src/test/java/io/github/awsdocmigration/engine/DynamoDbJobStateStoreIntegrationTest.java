@@ -374,4 +374,72 @@ class DynamoDbJobStateStoreIntegrationTest {
         assertEquals(MigrationJobStatus.COMPLETED_WITH_ERRORS, completed.status());
         assertEquals(aggregate, completed.lastError());
     }
+    
+    @Test
+    void recoveryConfigurationIsBoundOnceToReadyJobAndPersistsAcrossReads() {
+        String fingerprint = "c".repeat(64);
+        assertTrue(store.createJob("recovery-config-job", 0, NOW));
+        assertTrue(store.bindManifestFingerprint("recovery-config-job", fingerprint));
+        assertTrue(store.transitionJob("recovery-config-job", MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.transitionJob("recovery-config-job", MigrationJobStatus.DISCOVERING,
+                MigrationJobStatus.READY, NOW.plusSeconds(2), null));
+
+        RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
+                fingerprint.toUpperCase(), "source-bucket", "incoming/",
+                "destination-bucket", "s3://source-bucket/manifests/job.jsonl",
+                "document-state", tableName, "arn:aws:states:us-east-1:123456789012:stateMachine:recovery",
+                io.github.awsdocmigration.domain.VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 300, 5, 20
+        );
+
+        assertTrue(store.bindRecoveryConfiguration("recovery-config-job", configuration));
+        assertTrue(store.bindRecoveryConfiguration("recovery-config-job", configuration));
+        assertEquals(configuration, store.getRecoveryConfiguration("recovery-config-job").orElseThrow());
+
+        RecoveryJobConfiguration conflicting = new RecoveryJobConfiguration(
+                fingerprint, "different-source", "incoming/", "destination-bucket",
+                "s3://source-bucket/manifests/job.jsonl", "document-state", tableName,
+                configuration.stateMachineArn(),
+                io.github.awsdocmigration.domain.VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 300, 5, 20
+        );
+        assertFalse(store.bindRecoveryConfiguration("recovery-config-job", conflicting));
+        assertEquals(configuration, store.getRecoveryConfiguration("recovery-config-job").orElseThrow());
+    }
+
+    @Test
+    void recoveryConfigurationRequiresReadyJobAndMatchingManifestFingerprint() {
+        String fingerprint = "d".repeat(64);
+        assertTrue(store.createJob("not-ready-config-job", 0, NOW));
+        RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
+                fingerprint, "source-bucket", "", "destination-bucket",
+                "s3://source-bucket/manifest.jsonl", "document-state", tableName,
+                "arn:aws:states:us-east-1:123456789012:stateMachine:recovery",
+                io.github.awsdocmigration.domain.VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 300, 5, 10
+        );
+
+        assertFalse(store.bindRecoveryConfiguration("not-ready-config-job", configuration));
+        assertTrue(store.getRecoveryConfiguration("not-ready-config-job").isEmpty());
+        assertFalse(store.bindRecoveryConfiguration("missing-config-job", configuration));
+    }
+
+    @Test
+    void recoveryConfigurationRejectsInvalidBoundsAndFingerprint() {
+        assertThrows(IllegalArgumentException.class, () -> new RecoveryJobConfiguration(
+                "not-a-sha", "source-bucket", "", "destination-bucket",
+                "s3://source-bucket/manifest.jsonl", "document-state", tableName,
+                "arn:aws:states:us-east-1:123456789012:stateMachine:recovery",
+                io.github.awsdocmigration.domain.VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 300, 5, 10
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new RecoveryJobConfiguration(
+                "e".repeat(64), "source-bucket", "", "destination-bucket",
+                "s3://source-bucket/manifest.jsonl", "document-state", tableName,
+                "arn:aws:states:us-east-1:123456789012:stateMachine:recovery",
+                io.github.awsdocmigration.domain.VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 2, 5, 10
+        ));
+    }
 }
