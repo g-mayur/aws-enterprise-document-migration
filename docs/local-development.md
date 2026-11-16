@@ -70,13 +70,13 @@ export S3_INTEGRATION_ENDPOINT_URL=http://localhost:4566
 mvn --batch-mode clean verify -f application/pom.xml
 ```
 
-These credentials are local placeholders only. The test uses the endpoint supplied by `S3_INTEGRATION_ENDPOINT_URL`; it does not contact AWS. The GitHub Actions Java validation job starts the same pinned LocalStack image and sets these variables automatically.
+These credentials are local placeholders only. The test uses the endpoint supplied by `S3_INTEGRATION_ENDPOINT_URL`; it does not contact AWS. The GitHub Actions Java validation job starts the same pinned LocalStack image and sets these variables automatically. The companion `S3SourceApiIntegrationTest` uses the same endpoint to create a real object, validate the source bucket, discover the object under its configured prefix, and read it through the source connector's conditional snapshot request. It verifies the discovered record's identity, size and snapshot metadata before comparing the streamed bytes.
 
 ## AWS-free migration-flow integration test
 
 The Maven test suite also includes `LocalFilesystemMigrationFlowIntegrationTest`. It creates real files in a temporary directory, discovers them through `FilesystemSource`, writes and reads a JSONL manifest, then runs each document through the migration verification and destination-key logic. A test-only in-memory destination captures the uploaded bytes and SHA-256 values so the test can verify content integrity without contacting AWS.
 
-This filesystem test exercises the local source-to-destination migration flow, but it does not invoke the production S3 API or exercise the full command-line `migrate` entry point. The separate `S3ApiIntegrationTest` covers actual S3 API calls for the production S3 destination writer.
+This filesystem test exercises the local source-to-destination migration flow, but it does not invoke the production S3 API or exercise the full command-line `migrate` entry point. The separate `S3ApiIntegrationTest` covers actual S3 API calls for the production S3 destination writer. `S3SourceApiIntegrationTest` covers the production S3 source connector's unversioned-bucket discovery and snapshot-read path. Both tests are skipped unless `S3_INTEGRATION_ENDPOINT_URL` is configured.
 
 ## Optional S3-compatible endpoint
 
@@ -94,7 +94,7 @@ When `S3_ENDPOINT_URL` is unset or blank, the SDK's standard AWS S3 endpoint res
 
 ## AWS credentials are not needed for local tests
 
-The DynamoDB integration tests use local endpoint configuration and dummy local credentials. The S3 API integration test uses LocalStack and dummy local credentials when `S3_INTEGRATION_ENDPOINT_URL` is configured. Neither test should connect to AWS. Do not add real access keys, session tokens, customer data, production manifests or Terraform state to the repository.
+The DynamoDB integration tests use local endpoint configuration and dummy local credentials. The S3 API integration tests use LocalStack and dummy local credentials when `S3_INTEGRATION_ENDPOINT_URL` is configured. Neither test should connect to AWS. Do not add real access keys, session tokens, customer data, production manifests or Terraform state to the repository.
 
 ## Configure AWS credentials only when preparing to use AWS
 
