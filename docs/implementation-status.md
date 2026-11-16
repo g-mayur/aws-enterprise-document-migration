@@ -34,6 +34,6 @@ This document describes the current starter implementation. A successful build d
 | Job-level finalization | Implemented (starter) | A running job finalizes only when every registered shard is COMPLETED or FAILED after all three claims are exhausted; retry-eligible failures and PENDING/RUNNING shards block finalization. Mixed outcomes become COMPLETED_WITH_ERRORS with aggregated shard errors |
 | Deterministic shard assignment | Implemented (starter) | SHA-256 assignment from document/version identity; independent of manifest ordering; CLI executes only the selected shard |
 | Distributed orchestration | Implemented (starter) | Operator-triggered planning, dispatch, reconciliation, and a bounded foreground controller are implemented; automated scheduling and production enablement remain gated |
-| Production monitoring/alarms | Not implemented | Define SLOs, metrics and dashboards |
+| Production monitoring/alarms | Implemented (infrastructure baseline) | CloudWatch dashboard and alarms cover Step Functions failure/timeout, ECS worker CPU/memory and DynamoDB state-table throttling; document-level SLO metrics remain outstanding |
 
 Do not describe this release as production-ready until all relevant production-readiness gates pass.
