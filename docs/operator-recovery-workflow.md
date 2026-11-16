@@ -55,7 +55,7 @@ java -jar target/document-migration-worker.jar \
   --region us-east-1
 ```
 
-The command downloads the specified S3 manifest, recalculates its SHA-256 fingerprint, verifies it matches the prepared `READY` job, and verifies the state machine is Standard. It then atomically writes a separate `RECOVERY_CONFIG` item only if the job remains `READY` with that fingerprint. The DynamoDB transaction prevents configuration binding to a missing, unprepared, or differently fingerprinted job.
+The command downloads the specified S3 manifest, recalculates its SHA-256 fingerprint, validates the source bucket/prefix and complete registered shard plan, verifies it matches the prepared `READY` job, and verifies the state machine is Standard. It then atomically writes a separate `RECOVERY_CONFIG` item only if the job remains `READY` with that fingerprint. The DynamoDB transaction prevents configuration binding to a missing, unprepared, or differently fingerprinted job.
 
 The configuration includes source bucket/prefix, destination bucket, manifest URI and fingerprint, document/job state tables, state-machine ARN, version policy, Region, worker lease duration, document-attempt limit, and maximum shard concurrency. The concurrency value must match the deployed Step Functions Map configuration; this command records the value but does not inspect the definition's Map state.
 
