@@ -20,7 +20,7 @@ public final class S3ClientFactory {
     public static S3Client create(Region region, String endpointUrl) {
         Objects.requireNonNull(region, "AWS Region is required");
 
-        S3Client.Builder builder = S3Client.builder().region(region);
+        var builder = S3Client.builder().region(region);
 
         if (endpointUrl != null && !endpointUrl.isBlank()) {
             URI endpoint = parseEndpoint(endpointUrl);
