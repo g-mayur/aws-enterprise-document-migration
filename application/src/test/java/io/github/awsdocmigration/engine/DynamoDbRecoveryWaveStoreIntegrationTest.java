@@ -157,6 +157,31 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
     }
 
     @Test
+    @Test
+    void controllerObservationUpdatesOnlyTheExactActiveExecution() {
+        RecoveryWaveLease lease = store.acquire(
+                "job-observe", "wave-observe", "owner-observe", List.of(0),
+                "recovery-job-observe", NOW
+        ).orElseThrow();
+        String executionArn = "arn:aws:states:region:account:execution:state-machine:observe";
+        assertTrue(store.bindExecutionRequest(lease, "arn:aws:states:region:account:stateMachine:machine",
+                "a".repeat(64), NOW.plusSeconds(1)));
+        assertTrue(store.recordExecutionStatus(lease, executionArn, "RUNNING", NOW.plusSeconds(2)));
+
+        RecoveryWaveSnapshot active = store.get("job-observe").orElseThrow();
+        assertFalse(store.recordObservedExecutionStatus(
+                active, executionArn + "-different", "SUCCEEDED", NOW.plusSeconds(3)));
+        assertTrue(store.recordObservedExecutionStatus(
+                active, executionArn, "SUCCEEDED", NOW.plusSeconds(3)));
+
+        RecoveryWaveSnapshot terminal = store.get("job-observe").orElseThrow();
+        assertEquals("TERMINAL", terminal.state());
+        assertEquals("SUCCEEDED", terminal.executionStatus());
+        assertFalse(store.recordObservedExecutionStatus(
+                active, executionArn, "FAILED", NOW.plusSeconds(4)),
+                "A stale observation must not overwrite a terminal wave");
+    }
+
     void concurrentAcquisitionAllowsExactlyOneOwnerAndUnknownStatusKeepsSlotLocked() throws Exception {
         int contenders = 12;
         CountDownLatch ready = new CountDownLatch(contenders);
