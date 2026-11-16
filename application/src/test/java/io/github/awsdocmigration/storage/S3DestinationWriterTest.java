@@ -4,7 +4,7 @@ import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
 import io.github.awsdocmigration.engine.DocumentStateStore;
 import io.github.awsdocmigration.engine.MultipartUploadCheckpoint;
-import io.github.awsdocmigration.engine.MultipartUploadContext;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
