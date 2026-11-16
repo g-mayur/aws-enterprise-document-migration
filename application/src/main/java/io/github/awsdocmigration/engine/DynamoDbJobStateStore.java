@@ -425,12 +425,9 @@ public final class DynamoDbJobStateStore implements JobStateStore {
         values.put(":reviewer", s(reviewer));
         values.put(":now", n(now.toEpochMilli()));
 
+        values.put(":reviewNote", s(reviewNote == null ? "" : reviewNote));
         String updateExpression = "SET #reviewedBy = :reviewer, #reviewedAt = :now, "
-                + "#updatedAt = :now";
-        if (reviewNote != null && !reviewNote.isBlank()) {
-            values.put(":reviewNote", s(reviewNote));
-            updateExpression += ", #reviewNote = :reviewNote";
-        }
+                + "#updatedAt = :now, #reviewNote = :reviewNote";
 
         try {
             dynamoDb.updateItem(UpdateItemRequest.builder()
