@@ -123,9 +123,9 @@ public final class DynamoDbRecoveryWaveStore {
                             Map.entry("#updatedAt", "updatedAt"),
                             Map.entry("#executionArn", "executionArn"),
                             Map.entry("#stateMachineArn", "stateMachineArn"),
-                            Map.entry("#executionInputDigest", "executionInputDigest",
-                            "#reconciliationStatus", "reconciliationStatus",
-                            "#reconciledAt", "reconciledAt")
+                            Map.entry("#executionInputDigest", "executionInputDigest"),
+                            Map.entry("#reconciliationStatus", "reconciliationStatus"),
+                            Map.entry("#reconciledAt", "reconciledAt")
                     ))
                     .expressionAttributeValues(values)
                     .returnValues("ALL_NEW")
