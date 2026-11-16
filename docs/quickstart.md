@@ -49,7 +49,7 @@ java -jar target/document-migration-worker.jar \
 
 The sample manifest's `relativePath` must match the source-relative file path.
 
-The current CLI stages each document to a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object uploads use sequential multipart streaming above 64 MiB and spool one part at a time to temporary disk. Multipart resume across worker/process restarts is not implemented.
+The current CLI stages each document to a temporary local file for checksum-then-upload to avoid loading the object into heap; ensure the worker has adequate encrypted ephemeral disk. Large-object uploads use sequential multipart streaming above 64 MiB and spool one part at a time to temporary disk. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease and can be resumed after a worker/process restart by reconciling the checkpoint with S3's uploaded parts. This behavior has automated LocalStack coverage, but still requires validation in the target AWS environment.
 
 ## Run a durable sharded migration
 
