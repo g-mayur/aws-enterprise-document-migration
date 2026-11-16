@@ -9,6 +9,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 
 import java.time.Instant;
 import java.util.List;
@@ -124,6 +125,55 @@ class DynamoDbRecoveryWaveStoreTest {
         assertTrue(request.getValue().conditionExpression().contains("#generation = :generation"));
         assertEquals("RECONCILED",
                 request.getValue().expressionAttributeValues().get(":reconciled").s());
+    }
+
+    @Test
+    void reconciliationAuditAndWaveUnlockAreCommittedInOneTransaction() {
+        DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
+        DynamoDbRecoveryWaveStore store = new DynamoDbRecoveryWaveStore(dynamoDb, "job-state");
+        RecoveryWaveSnapshot snapshot = new RecoveryWaveSnapshot(
+                "job-1", "wave-1", 2, "TERMINAL", "FAILED",
+                "arn:execution:2", "arn:stateMachine:1", "a".repeat(64),
+                List.of(0, 1), NOW
+        );
+        RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
+                "job-1", "wave-1", 2, NOW.plusSeconds(10), "FAILED",
+                2, 1, 1, 0, 0, 0, "WAITING_FOR_SHARDS"
+        );
+
+        assertTrue(store.markReconciled(snapshot, audit));
+
+        ArgumentCaptor<TransactWriteItemsRequest> request =
+                ArgumentCaptor.forClass(TransactWriteItemsRequest.class);
+        verify(dynamoDb).transactWriteItems(request.capture());
+        assertEquals(2, request.getValue().transactItems().size());
+        assertTrue(request.getValue().transactItems().get(0).update()
+                .conditionExpression().contains("#generation = :generation"));
+        var auditPut = request.getValue().transactItems().get(1).put();
+        assertEquals("RECOVERY_RECONCILIATION#00000000000000000002#"
+                        + NOW.plusSeconds(10).toEpochMilli(),
+                auditPut.item().get("sk").s());
+        assertEquals("WAITING_FOR_SHARDS", auditPut.item().get("finalizationStatus").s());
+        assertEquals("1", auditPut.item().get("completedShards").n());
+        assertTrue(auditPut.conditionExpression().contains("attribute_not_exists(pk)"));
+    }
+
+    @Test
+    void rejectsAuditForDifferentWaveIdentity() {
+        DynamoDbClient dynamoDb = mock(DynamoDbClient.class);
+        DynamoDbRecoveryWaveStore store = new DynamoDbRecoveryWaveStore(dynamoDb, "job-state");
+        RecoveryWaveSnapshot snapshot = new RecoveryWaveSnapshot(
+                "job-1", "wave-1", 1, "TERMINAL", "SUCCEEDED",
+                "arn:execution:1", "arn:stateMachine:1", "a".repeat(64),
+                List.of(0), NOW
+        );
+        RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
+                "job-1", "different-wave", 1, NOW, "SUCCEEDED",
+                1, 1, 0, 0, 0, 0, "COMPLETED"
+        );
+
+        assertThrows(IllegalArgumentException.class, () -> store.markReconciled(snapshot, audit));
+        verifyNoInteractions(dynamoDb);
     }
 
     @Test
