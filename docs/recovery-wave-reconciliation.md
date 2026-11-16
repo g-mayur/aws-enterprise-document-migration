@@ -44,6 +44,18 @@ The recovery-wave slot cannot be acquired for another generation until the previ
 
 The report reflects durable shard state at reconciliation time. Workers may still be running when an active lease is reported; do not dispatch a replacement for those shards. A subsequent recovery plan can be reviewed after the wave is reconciled and any active leases have expired.
 
+## Failure explanations and operator response
+
+| Failure reported | Meaning | Operator action |
+|---|---|---|
+| Wave is not durably confirmed terminal | The durable wave is still active or has an unknown/non-terminal execution status | Inspect the recorded Step Functions execution; do not dispatch another wave |
+| Missing execution ARN or state-machine ARN | The wave does not contain enough identity to verify the execution | Investigate the incomplete wave record; do not edit it manually |
+| Execution ARN, state-machine ARN, or status mismatch | The authoritative Step Functions response does not match the persisted wave identity | Stop and investigate the execution and wave record before retrying |
+| Wave references a shard outside the prepared job range | The persisted recovery selection is inconsistent with the registered job | Treat as a state-integrity issue and do not dispatch |
+| Audit transaction was not committed | Another reconciliation may have completed first, or the wave changed before the conditional transaction | Re-read the wave and audit history; retry only if the wave remains terminal and unreconciled |
+
+A failure before the final transaction does not mark the wave reconciled and does not create a success audit item. The CLI exception message identifies the failed safety gate. Resolve the underlying condition, then rerun `reconcile-recovery`; never bypass the conditional checks by editing DynamoDB records.
+
 ## Durable audit history
 
 Each successful reconciliation writes a separate item to the existing job-state DynamoDB table. The partition key is `JOB#<job-id>` and the sort key is `RECOVERY_RECONCILIATION#<generation>#<epoch-milliseconds>`. Items are immutable and include the wave ID, generation, reconciliation time, terminal execution status, all shard disposition counts, and the finalization result. The wave-state update and audit-item creation use one `TransactWriteItems` request, so an audit record cannot be written without releasing the matching wave slot, and the slot cannot be released without its audit record.
