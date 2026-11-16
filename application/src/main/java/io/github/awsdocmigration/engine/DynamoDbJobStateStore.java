@@ -131,6 +131,102 @@ public final class DynamoDbJobStateStore implements JobStateStore {
     }
 
     @Override
+    public boolean bindRecoveryConfiguration(
+            String jobId,
+            RecoveryJobConfiguration configuration
+    ) {
+        requireText(jobId, "jobId");
+        Objects.requireNonNull(configuration, "Recovery configuration is required");
+
+        Optional<RecoveryJobConfiguration> existing = getRecoveryConfiguration(jobId);
+        if (existing.isPresent()) {
+            return existing.get().equals(configuration);
+        }
+
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s(jobKey(jobId)));
+        item.put("sk", s("RECOVERY_CONFIG"));
+        item.put("entityType", s("RECOVERY_CONFIG"));
+        item.put("jobId", s(jobId));
+        item.put("manifestFingerprint", s(configuration.manifestFingerprint()));
+        item.put("sourceBucket", s(configuration.sourceBucket()));
+        item.put("sourcePrefix", s(configuration.sourcePrefix()));
+        item.put("destinationBucket", s(configuration.destinationBucket()));
+        item.put("manifestS3Uri", s(configuration.manifestS3Uri()));
+        item.put("documentStateTable", s(configuration.documentStateTable()));
+        item.put("jobStateTable", s(configuration.jobStateTable()));
+        item.put("stateMachineArn", s(configuration.stateMachineArn()));
+        item.put("versionPolicy", s(configuration.versionPolicy().name()));
+        item.put("region", s(configuration.region()));
+        item.put("leaseSeconds", n(configuration.leaseSeconds()));
+        item.put("maximumDocumentAttempts", n(configuration.maximumDocumentAttempts()));
+        item.put("maximumConcurrentShards", n(configuration.maximumConcurrentShards()));
+
+        try {
+            dynamoDb.transactWriteItems(TransactWriteItemsRequest.builder()
+                    .transactItems(
+                            TransactWriteItem.builder().conditionCheck(
+                                    software.amazon.awssdk.services.dynamodb.model.ConditionCheck.builder()
+                                            .tableName(tableName)
+                                            .key(key(jobId, "JOB"))
+                                            .conditionExpression(
+                                                    "#status = :ready AND #manifestFingerprint = :fingerprint")
+                                            .expressionAttributeNames(Map.of(
+                                                    "#status", "status",
+                                                    "#manifestFingerprint", "manifestFingerprint"))
+                                            .expressionAttributeValues(Map.of(
+                                                    ":ready", s(MigrationJobStatus.READY.name()),
+                                                    ":fingerprint", s(configuration.manifestFingerprint())))
+                                            .build()
+                            ).build(),
+                            TransactWriteItem.builder().put(
+                                    Put.builder()
+                                            .tableName(tableName)
+                                            .item(item)
+                                            .conditionExpression(
+                                                    "attribute_not_exists(pk) AND attribute_not_exists(sk)")
+                                            .build()
+                            ).build()
+                    )
+                    .build());
+            return true;
+        } catch (TransactionCanceledException conflictOrInvalidJobState) {
+            return getRecoveryConfiguration(jobId)
+                    .map(configuration::equals)
+                    .orElse(false);
+        }
+    }
+
+    @Override
+    public Optional<RecoveryJobConfiguration> getRecoveryConfiguration(String jobId) {
+        requireText(jobId, "jobId");
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId, "RECOVERY_CONFIG"))
+                .consistentRead(true)
+                .build()).item();
+        if (item == null || item.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new RecoveryJobConfiguration(
+                text(item, "manifestFingerprint"),
+                text(item, "sourceBucket"),
+                text(item, "sourcePrefix"),
+                text(item, "destinationBucket"),
+                text(item, "manifestS3Uri"),
+                text(item, "documentStateTable"),
+                text(item, "jobStateTable"),
+                text(item, "stateMachineArn"),
+                io.github.awsdocmigration.domain.VersionPolicy.valueOf(
+                        text(item, "versionPolicy")),
+                text(item, "region"),
+                integer(item, "leaseSeconds"),
+                integer(item, "maximumDocumentAttempts"),
+                integer(item, "maximumConcurrentShards")
+        ));
+    }
+
+    @Override
     public boolean transitionJob(
             String jobId,
             MigrationJobStatus expected,
