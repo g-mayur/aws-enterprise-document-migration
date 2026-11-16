@@ -215,7 +215,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                                 + "#destinationKey = :destinationKey, "
                                 + "#checksum = :checksum, "
                                 + "#updatedAt = :now "
-                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError"
+                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError, #multipartUpload"
                 )
                 .conditionExpression(
                         "#status = :inProgress AND #leaseOwner = :worker "
@@ -262,7 +262,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                         "SET #status = :failed, "
                                 + "#lastError = :error, "
                                 + "#updatedAt = :now "
-                                + "REMOVE #leaseOwner, #leaseExpiresAt, #multipartUpload"
+                                + "REMOVE #leaseOwner, #leaseExpiresAt"
                 )
                 .conditionExpression(
                         "#status = :inProgress AND #leaseOwner = :worker "
