@@ -19,7 +19,7 @@ A checked implementation item means the capability exists in the current starter
 - [ ] Post-execution recovery reconciliation and operator-facing final shard summary implemented.
 - [ ] Multipart upload resume across worker/process restarts implemented.
 - [ ] Automatic scheduled dispatch/retry and reconciliation for failed or never-started shard workers implemented.
-- [ ] Dead-letter reporting and operator replay workflow implemented.
+- [ ] Dead-letter reporting and exhausted-shard manual-review workflow implemented.
 - [ ] Production monitoring, alarms, dashboards and operational SLOs implemented.
 
 ## Pilot and production validation
