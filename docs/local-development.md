@@ -51,7 +51,21 @@ DynamoDB integration tests are skipped unless `DYNAMODB_LOCAL_ENDPOINT` is confi
 
 The Maven test suite includes `LocalFilesystemMigrationFlowIntegrationTest`. It creates real files in a temporary directory, discovers them through `FilesystemSource`, writes and reads a JSONL manifest, then runs each document through the migration verification and destination-key logic. A test-only in-memory destination captures the uploaded bytes and SHA-256 values so the test can verify content integrity without contacting AWS.
 
-This test exercises the local source-to-destination migration flow, but it does **not** invoke the production S3 API, validate an S3-compatible service, or exercise the full command-line `migrate` entry point. The current CLI constructs AWS SDK clients directly and does not expose a configurable local S3 endpoint. A real S3 API integration test therefore remains a separate future milestone. The in-memory destination is a test fixture, not a production storage implementation.
+This test exercises the local source-to-destination migration flow, but it does **not** invoke the production S3 API, validate an S3-compatible service, or exercise the full command-line `migrate` entry point. The CLI now supports an optional `S3_ENDPOINT_URL` override for S3, but a real S3 API integration test against a local service remains a separate future milestone. The in-memory destination is a test fixture, not a production storage implementation.
+
+## Optional S3-compatible endpoint
+
+The CLI accepts an optional `S3_ENDPOINT_URL` environment variable. When set, the S3 SDK client uses that endpoint and enables path-style bucket addressing, which is commonly required by local S3-compatible services such as LocalStack and MinIO.
+
+Example for a local service listening on port 4566:
+
+```bash
+export S3_ENDPOINT_URL=http://localhost:4566
+```
+
+Use only a local or otherwise explicitly trusted endpoint for development. Do not include credentials, query parameters or paths in the endpoint URL. The endpoint must be an absolute HTTP or HTTPS URL containing a host.
+
+When `S3_ENDPOINT_URL` is unset or blank, the SDK's standard AWS S3 endpoint resolution is unchanged. The override applies only to S3; DynamoDB and Step Functions clients continue to use their normal AWS endpoint resolution. This setting alone does not provision or start an S3-compatible service, create buckets, or make the full migration workflow AWS-free. The S3 API integration test against a local service is a separate validation step.
 
 ## AWS credentials are not needed for local tests
 
