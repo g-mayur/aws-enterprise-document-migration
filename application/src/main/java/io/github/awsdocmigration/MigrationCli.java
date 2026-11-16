@@ -24,6 +24,7 @@ import io.github.awsdocmigration.engine.DynamoDbRecoveryWaveStore;
 import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
 import io.github.awsdocmigration.engine.RecoveryWaveExecutionGuard;
 import io.github.awsdocmigration.engine.RecoveryWaveReconciliationCoordinator;
+import io.github.awsdocmigration.engine.RecoveryJobConfiguration;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -89,6 +90,10 @@ public final class MigrationCli {
 
                 case "prepare-job" -> prepareJob(dynamoDb, arguments);
 
+                case "configure-recovery" -> configureRecovery(
+                        dynamoDb, s3, stepFunctions, arguments, region
+                );
+
                 case "inspect-job" -> inspectJob(dynamoDb, arguments);
 
                 case "plan-recovery" -> planRecovery(dynamoDb, s3, arguments);
@@ -110,7 +115,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, configure-recovery, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
                 );
             }
         }
@@ -348,6 +353,71 @@ public final class MigrationCli {
                             + " failed document(s)"
             );
         }
+    }
+
+    /**
+     * Binds exact recovery execution settings to an already prepared job.
+     * The manifest fingerprint is recalculated from S3 before the immutable bind.
+     */
+    private static void configureRecovery(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            SfnClient stepFunctions,
+            Map<String, String> arguments,
+            String region
+    ) throws Exception {
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        String manifestS3Uri = required(arguments, "manifest-s3-uri");
+        String sourceBucket = required(arguments, "source-bucket");
+        String sourcePrefix = requiredPresent(arguments, "source-prefix");
+        JobStateStore store = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+
+        Path manifestPath = resolveManifestPath(s3, arguments);
+        RecoveryWavePlanner.Plan verifiedPlan;
+        try {
+            verifiedPlan = new RecoveryWavePlanner(store).plan(
+                    jobId, manifestPath, sourceBucket, sourcePrefix, Instant.now());
+        } finally {
+            Files.deleteIfExists(manifestPath);
+        }
+
+        String stateMachineArn = required(arguments, "state-machine-arn");
+        var stateMachine = stepFunctions.describeStateMachine(
+                DescribeStateMachineRequest.builder().stateMachineArn(stateMachineArn).build());
+        if (stateMachine.type() != StateMachineType.STANDARD) {
+            throw new IllegalArgumentException(
+                    "Recovery requires a Standard Step Functions state machine");
+        }
+
+        RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
+                verifiedPlan.manifestFingerprint(),
+                sourceBucket,
+                sourcePrefix,
+                required(arguments, "destination-bucket"),
+                manifestS3Uri,
+                required(arguments, "state-table"),
+                jobStateTable,
+                stateMachineArn,
+                VersionPolicy.valueOf(required(arguments, "version-policy")),
+                region,
+                parsePositiveInt(required(arguments, "lease-seconds"), "lease-seconds"),
+                parsePositiveInt(required(arguments, "max-attempts"), "max-attempts"),
+                parsePositiveInt(required(arguments, "max-concurrent-shards"), "max-concurrent-shards")
+        );
+
+        if (verifiedPlan.job().status() != MigrationJobStatus.READY) {
+            throw new IllegalStateException(
+                    "Recovery configuration can only be bound before the job starts running");
+        }
+        if (!store.bindRecoveryConfiguration(jobId, configuration)) {
+            throw new IllegalStateException(
+                    "Recovery configuration conflicts with the immutable configuration already bound to this job");
+        }
+        System.out.printf(
+                "Immutable recovery configuration bound. job=%s manifestSha256=%s stateMachine=%s maxConcurrentShards=%d%n",
+                jobId, verifiedPlan.manifestFingerprint(), stateMachineArn,
+                configuration.maximumConcurrentShards());
     }
 
     /**

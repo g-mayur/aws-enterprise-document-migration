@@ -27,7 +27,7 @@ A recovery request must be bound to the already prepared job and its immutable m
 - State machine ARN and configured maximum shard concurrency.
 - A unique recovery-wave generation and idempotency identity.
 
-The dispatcher must verify that the job is in a recoverable non-terminal state, the manifest fingerprint matches the prepared job, and the complete contiguous shard set is registered before constructing a dispatch request. It must not infer source or destination details from shard state.
+The dispatcher must verify that the job is in a recoverable non-terminal state, the manifest fingerprint matches the prepared job, and the complete contiguous shard set is registered before constructing a dispatch request. It must not infer source or destination details from shard state. The immutable RecoveryJobConfiguration is persisted as a separate RECOVERY_CONFIG item only for a READY job and only when its fingerprint matches the prepared job. Future unattended dispatch must load this record and must not accept replacement settings from an external trigger.
 
 ## Eligibility rules
 

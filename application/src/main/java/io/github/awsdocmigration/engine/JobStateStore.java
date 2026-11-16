@@ -30,6 +30,19 @@ public interface JobStateStore {
      */
     boolean bindManifestFingerprint(String jobId, String fingerprint);
 
+    /**
+     * Atomically binds the complete recovery execution configuration to a READY
+     * job whose immutable manifest fingerprint matches the configuration.
+     * Repeating an identical bind succeeds; a conflicting bind is rejected.
+     */
+    boolean bindRecoveryConfiguration(
+            String jobId,
+            RecoveryJobConfiguration configuration
+    );
+
+    /** Returns the immutable recovery configuration, when one has been bound. */
+    Optional<RecoveryJobConfiguration> getRecoveryConfiguration(String jobId);
+
 
     boolean transitionJob(
             String jobId,
