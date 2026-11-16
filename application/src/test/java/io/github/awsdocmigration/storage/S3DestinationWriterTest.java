@@ -317,7 +317,7 @@ class S3DestinationWriterTest {
                         software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.class);
         verify(s3).completeMultipartUpload(completeCaptor.capture());
         assertEquals(2, completeCaptor.getValue().multipartUpload().parts().size());
-        verify(stateStore, times(2)).clearMultipartUpload(
+        verify(stateStore, ).clearMultipartUpload(
                 anyString(), anyInt(), anyString(), anyString(), any(),
                 anyString(), any());
     }
@@ -375,7 +375,7 @@ class S3DestinationWriterTest {
         verify(s3, times(2)).uploadPart(partCaptor.capture(), any(RequestBody.class));
         assertEquals(java.util.List.of(1, 2), partCaptor.getAllValues().stream()
                 .map(UploadPartRequest::partNumber).toList());
-        verify(stateStore).clearMultipartUpload(
+        verify(stateStore, times(2)).clearMultipartUpload(
                 anyString(), anyInt(), anyString(), anyString(), any(),
                 anyString(), any());
     }
