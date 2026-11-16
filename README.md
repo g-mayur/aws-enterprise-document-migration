@@ -4,6 +4,25 @@ A source-agnostic, extensible boilerplate for migrating documents, metadata and 
 
 > **Status: community starter / reference implementation.** This repository is a foundation for engineering teams. It is not a certified turnkey migration product. Validate connector behavior, security, quotas, throughput, recovery and cost with a representative pilot before production use.
 
+## Start here
+
+**You can clone, build and run the automated local tests without an AWS account or AWS credentials.**
+
+```bash
+git clone https://github.com/g-mayur/aws-enterprise-document-migration.git
+cd aws-enterprise-document-migration
+bash scripts/local-validate.sh
+```
+
+Requirements: Git, Java 17+, Maven 3.9+. Docker is recommended so the script can run the DynamoDB Local integration tests. Terraform is optional and is checked when installed.
+
+- [Local development and validation](docs/local-development.md): prerequisites, clean-clone steps, test behavior and troubleshooting.
+- [AWS migration quickstart](docs/quickstart.md): separate instructions for credentials, AWS resources and actual migration execution.
+- [Deployment validation](docs/deployment-validation.md): AWS infrastructure and pilot validation.
+- [Production readiness](docs/production-readiness.md): release and production validation gates.
+
+**Important:** Local validation does not deploy AWS infrastructure or verify a real S3 migration. Actual AWS operations require an AWS account, provisioned resources, approved IAM permissions and credentials.
+
 ## What it provides
 
 - A connector SPI so source systems can be added without changing the migration engine.
@@ -33,31 +52,11 @@ A source-agnostic, extensible boilerplate for migrating documents, metadata and 
 
 The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. Multipart resume across process restarts is not implemented.
 
-## Quick start: local filesystem to S3
-
-Requirements: Java 17+, Maven 3.9+, AWS CLI v2, an AWS account and an S3 destination bucket. Terraform is optional for the local build.
-
-1. Clone this repository.
-2. Build and test with mvn clean verify from the application directory.
-3. Configure AWS credentials using an AWS-supported provider (for example, an IAM Identity Center profile). Do not put access keys in source control.
-4. Create a JSONL manifest using examples/manifests/sample.jsonl as a template. Each line is one document-version record.
-5. Run the worker:
-
-       java -jar target/document-migration-worker.jar \
-         --source-type filesystem \
-         --source-root /absolute/path/to/source \
-         --destination-bucket YOUR_DESTINATION_BUCKET \
-         --manifest ../examples/manifests/sample.jsonl \
-         --version-policy ALL_VERSIONS \
-         --region us-east-1
-
-For durable sharded execution, configure the separate document-state and job-state DynamoDB tables and use the job-state options described in docs/quickstart.md. See docs/implementation-status.md for current limitations. Shard claims are persisted with a limit of three total attempts (including the initial claim); failed shards can be reclaimed while attempts remain, and an expired final attempt becomes terminally failed. This does not automatically dispatch replacement ECS workers.
-
 ## Configure for your environment
 
 Copy application/src/main/resources/application.yml or provide environment variables. At minimum configure the source type and connector settings, destination bucket and AWS Region, version policy, manifest location, worker concurrency and retry limits.
 
-The source connector must implement the DocumentSource interface. See docs/connector-development.md.
+The source connector must implement the DocumentSource interface. See [Connector development](docs/connector-development.md).
 
 ## Version semantics
 
@@ -75,7 +74,7 @@ Before production: complete the gates in docs/production-readiness.md, run load/
 
 ## Contributing
 
-See CONTRIBUTING.md. Connector contributions should include capability declarations, tests, pagination/throttling behavior and documentation.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Connector contributions should include capability declarations, tests, pagination/throttling behavior and documentation.
 
 ## License
 
