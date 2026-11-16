@@ -250,6 +250,69 @@ class DynamoDbDocumentStateStoreIntegrationTest {
         assertNull(persisted.leaseOwner());
     }
 
+    @Test
+    void multipartCheckpointSurvivesRestartAndLeaseReclaim() {
+        assertTrue(claim("worker-a", BASE_TIME, 3));
+        var firstCheckpoint = new MultipartUploadCheckpoint(
+                "upload-durable", "destination-bucket", "documents/large.bin",
+                12_000_000L, 5L * 1024L * 1024L, "b".repeat(64),
+                java.util.List.of(
+                        new MultipartUploadCheckpoint.CompletedPart(1, "etag-1")));
+
+        assertTrue(store.saveMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION, "worker-a",
+                firstCheckpoint, BASE_TIME.plusSeconds(1)));
+
+        // Simulate a new worker process by replacing the DynamoDB client and store.
+        dynamoDb.close();
+        dynamoDb = DynamoDbClient.builder()
+                .endpointOverride(URI.create(System.getenv("DYNAMODB_LOCAL_ENDPOINT")))
+                .region(Region.US_EAST_1)
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create("local", "local")))
+                .build();
+        store = new DynamoDbDocumentStateStore(dynamoDb, tableName);
+
+        assertEquals(firstCheckpoint, store.getMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION).orElseThrow());
+
+        Instant reclaimedAt = BASE_TIME.plus(Duration.ofMinutes(6));
+        assertTrue(claim("worker-b", reclaimedAt, 3));
+        var secondCheckpoint = new MultipartUploadCheckpoint(
+                "upload-durable", "destination-bucket", "documents/large.bin",
+                12_000_000L, 5L * 1024L * 1024L, "b".repeat(64),
+                java.util.List.of(
+                        new MultipartUploadCheckpoint.CompletedPart(1, "etag-1"),
+                        new MultipartUploadCheckpoint.CompletedPart(2, "etag-2")));
+
+        assertFalse(store.saveMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION, "worker-a",
+                secondCheckpoint, reclaimedAt.plusSeconds(1)),
+                "A stale worker must not overwrite the new owner's checkpoint");
+
+        assertEquals(firstCheckpoint, store.getMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION).orElseThrow());
+
+        assertTrue(store.saveMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION, "worker-b",
+                secondCheckpoint, reclaimedAt.plusSeconds(1)));
+        assertEquals(secondCheckpoint, store.getMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION).orElseThrow());
+
+        assertTrue(store.clearMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION, "worker-b", reclaimedAt.plusSeconds(2)));
+        assertTrue(store.getMultipartUpload(
+                "job-integration", 0, "document-integration", "version-integration",
+                VersionIdentityType.SOURCE_VERSION).isEmpty());
+    }
+
     private boolean claim(String workerId, Instant now, int maximumAttempts) {
         return store.claim(
                 "job-integration",
