@@ -25,6 +25,7 @@ import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
 import io.github.awsdocmigration.engine.RecoveryWaveExecutionGuard;
 import io.github.awsdocmigration.engine.RecoveryWaveReconciliationCoordinator;
 import io.github.awsdocmigration.engine.RecoveryJobConfiguration;
+import io.github.awsdocmigration.engine.RecoveryWaveSnapshot;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -37,6 +38,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sfn.SfnClient;
 import software.amazon.awssdk.services.sfn.model.DescribeStateMachineRequest;
 import software.amazon.awssdk.services.sfn.model.StateMachineType;
+import software.amazon.awssdk.services.sfn.model.DescribeExecutionRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.core.sync.ResponseTransformer;
 
@@ -49,6 +51,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,6 +109,10 @@ public final class MigrationCli {
                         dynamoDb, stepFunctions, arguments
                 );
 
+                case "auto-recover" -> autoRecover(
+                        dynamoDb, s3, stepFunctions, arguments, region
+                );
+
                 case "migrate" -> migrate(
                         createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
@@ -115,7 +122,7 @@ public final class MigrationCli {
 
                 default -> throw new IllegalArgumentException(
                         "Unsupported mode: " + mode
-                                + ". Supported modes: generate-manifest, prepare-job, configure-recovery, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, migrate"
+                                + ". Supported modes: generate-manifest, prepare-job, configure-recovery, inspect-job, plan-recovery, dispatch-recovery, reconcile-recovery, auto-recover, migrate"
                 );
             }
         }
@@ -602,6 +609,152 @@ public final class MigrationCli {
             throw new IllegalStateException(
                     "Recovery execution status could not be safely confirmed. The wave remains locked; "
                             + "inspect its Step Functions execution and DynamoDB recovery-wave record before retrying.");
+        }
+    }
+
+    /**
+     * Runs a finite, explicitly confirmed recovery controller. Every wave is
+     * dispatched through the existing guarded path, observed by exact ARN,
+     * reconciled with its immutable audit, and followed by a fresh plan.
+     */
+    private static void autoRecover(
+            DynamoDbClient dynamoDb,
+            S3Client s3,
+            SfnClient stepFunctions,
+            Map<String, String> arguments,
+            String region
+    ) throws Exception {
+        validateRecoveryConfirmation(arguments);
+        int maximumWaves = boundedInt(arguments, "max-waves", 1, 10);
+        int pollSeconds = boundedInt(arguments, "poll-interval-seconds", 1, 30);
+        int runtimeSeconds = boundedInt(arguments, "max-runtime-seconds", 30, 3600);
+        long deadline = System.nanoTime() + Duration.ofSeconds(runtimeSeconds).toNanos();
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        JobStateStore jobStateStore = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+        DynamoDbRecoveryWaveStore waveStore = new DynamoDbRecoveryWaveStore(dynamoDb, jobStateTable);
+        int wavesDispatched = 0;
+
+        while (wavesDispatched < maximumWaves) {
+            requireControllerTime(deadline);
+            MigrationJobState job = jobStateStore.getJob(jobId)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown migration job: " + jobId));
+            if (job.status() == MigrationJobStatus.COMPLETED
+                    || job.status() == MigrationJobStatus.COMPLETED_WITH_ERRORS) {
+                System.out.printf("Automatic recovery stopped: job is terminal (%s).%n", job.status());
+                break;
+            }
+
+            RecoveryJobConfiguration configuration = jobStateStore.getRecoveryConfiguration(jobId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No immutable recovery configuration is bound to job " + jobId));
+            validateRecoveryConfiguration(configuration, jobStateTable, region);
+            RecoveryWavePlanner.Plan plan = loadRecoveryPlan(
+                    jobStateStore, s3, jobId, configuration);
+            printRecoveryPlan(plan);
+
+            long active = plan.assessments().values().stream()
+                    .filter(value -> value == ShardRecoveryInspector.Disposition.WAIT_FOR_ACTIVE_LEASE)
+                    .count();
+            long unknown = plan.assessments().values().stream()
+                    .filter(value -> value == ShardRecoveryInspector.Disposition.LEASE_EXPIRY_UNKNOWN)
+                    .count();
+            if (active > 0 || unknown > 0) {
+                System.out.printf(
+                        "Automatic recovery stopped: activeLeases=%d unknownLeaseExpiry=%d. "
+                                + "No replacement wave will be dispatched.%n", active, unknown);
+                break;
+            }
+            if (plan.selectedShardNumbers().isEmpty()) {
+                System.out.println(
+                        "Automatic recovery stopped: no eligible shards remain. "
+                                + "Exhausted shards require operator review.");
+                break;
+            }
+
+            dispatchRecovery(dynamoDb, s3, stepFunctions, arguments, region);
+            wavesDispatched++;
+            awaitAndPersistRecoveryExecution(
+                    stepFunctions, waveStore, jobId, pollSeconds, deadline);
+            reconcileRecovery(dynamoDb, stepFunctions, arguments);
+        }
+
+        System.out.printf(
+                "Automatic recovery controller stopped. job=%s wavesDispatched=%d "
+                        + "maximumWaves=%d runtimeLimitSeconds=%d%n",
+                jobId, wavesDispatched, maximumWaves, runtimeSeconds);
+        if (wavesDispatched == maximumWaves) {
+            System.out.println("Wave ceiling reached. Run inspect-job before requesting another recovery pass.");
+        }
+    }
+
+    private static void awaitAndPersistRecoveryExecution(
+            SfnClient stepFunctions,
+            DynamoDbRecoveryWaveStore waveStore,
+            String jobId,
+            int pollSeconds,
+            long deadline
+    ) throws InterruptedException {
+        while (true) {
+            requireControllerTime(deadline);
+            RecoveryWaveSnapshot snapshot = waveStore.get(jobId)
+                    .orElseThrow(() -> new IllegalStateException("Recovery wave record disappeared"));
+            if ("TERMINAL".equals(snapshot.state())) {
+                return;
+            }
+            if (!"ACTIVE".equals(snapshot.state())
+                    || snapshot.executionArn() == null
+                    || snapshot.stateMachineArn() == null) {
+                throw new IllegalStateException(
+                        "Recovery execution identity or state is unknown. The wave remains locked; "
+                                + "automatic recovery stopped without reconciliation.");
+            }
+
+            var execution = stepFunctions.describeExecution(
+                    DescribeExecutionRequest.builder().executionArn(snapshot.executionArn()).build());
+            if (!snapshot.executionArn().equals(execution.executionArn())
+                    || !snapshot.stateMachineArn().equals(execution.stateMachineArn())) {
+                throw new IllegalStateException(
+                        "Observed execution identity does not match the persisted wave. The wave remains locked.");
+            }
+            String observedStatus = execution.status().toString();
+            if (!List.of("RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED")
+                    .contains(observedStatus)) {
+                throw new IllegalStateException(
+                        "Unknown Step Functions status " + observedStatus + "; wave remains locked.");
+            }
+            if (!waveStore.recordObservedExecutionStatus(
+                    snapshot, execution.executionArn(), observedStatus, Instant.now())) {
+                throw new IllegalStateException(
+                        "Recovery wave changed while observing its execution; controller stopped.");
+            }
+            if (!"RUNNING".equals(observedStatus)) {
+                return;
+            }
+            requireControllerTime(deadline);
+            Thread.sleep(Duration.ofSeconds(pollSeconds).toMillis());
+        }
+    }
+
+    static int boundedInt(
+            Map<String, String> arguments,
+            String name,
+            int minimum,
+            int maximum
+    ) {
+        int value = parsePositiveInt(required(arguments, name), name);
+        if (value < minimum || value > maximum) {
+            throw new IllegalArgumentException(
+                    "--" + name + " must be between " + minimum + " and " + maximum);
+        }
+        return value;
+    }
+
+    private static void requireControllerTime(long deadline) {
+        if (System.nanoTime() >= deadline) {
+            throw new IllegalStateException(
+                    "Automatic recovery runtime limit reached. Any active wave remains locked; "
+                            + "inspect its exact Step Functions execution and reconcile manually.");
         }
     }
 

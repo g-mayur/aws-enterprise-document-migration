@@ -82,6 +82,17 @@ class MigrationCliTest {
     }
 
     @Test
+    void automaticRecoveryLimitsMustBeExplicitAndBounded() {
+        assertEquals(3, MigrationCli.boundedInt(Map.of("max-waves", "3"), "max-waves", 1, 10));
+        assertThrows(IllegalArgumentException.class, () ->
+                MigrationCli.boundedInt(Map.of("max-waves", "0"), "max-waves", 1, 10));
+        assertThrows(IllegalArgumentException.class, () ->
+                MigrationCli.boundedInt(Map.of("max-waves", "11"), "max-waves", 1, 10));
+        assertThrows(IllegalArgumentException.class, () ->
+                MigrationCli.boundedInt(Map.of("max-waves", "unbounded"), "max-waves", 1, 10));
+    }
+
+    @Test
     void generatesManifestFromDiscoveredRecords() throws Exception {
 
         Path manifest = tempDir.resolve("generated.jsonl");
