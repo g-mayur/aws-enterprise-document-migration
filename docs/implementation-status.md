@@ -19,7 +19,7 @@ This document describes the current starter implementation. A successful build d
 | CLI document-state integration | Implemented (starter) | Existing `--state-table` mode uses durable document claims and lease-owned completion/failure |
 | Read-only recovery planning | Implemented (starter) | Verifies the prepared manifest fingerprint, S3 source bucket/prefix, complete contiguous shard registration, and current shard eligibility without changing state |
 | Operator-triggered recovery dispatch | Implemented (starter) | Requires explicit confirmation, a Standard state machine, and a durable job-scoped wave lock; uses deterministic execution identity and fails closed on ambiguous outcomes. Destination bucket and version policy remain operator-supplied because they are not persisted with the job |
-| Recovery reconciliation and finalization | Not implemented | Re-read shard state after the recovery execution, summarize outcomes, and coordinate safe follow-up waves/finalization |
+| Recovery-wave reconciliation and finalization integration | Not implemented | Re-read shard state after a recovery execution, summarize outcomes, and invoke the existing job finalization coordinator only when durable state permits |
 | Durable retry orchestration | Partial foundation | Document attempt limits and lease reclamation are integrated; automatic failed-shard dispatch/retry remains pending |
 | Resumable multipart upload | Not implemented | Upload state and completed parts are not persisted across process restarts |
 | Migration job and shard lifecycle | Implemented (starter) | Separate DynamoDB job-state table; conditional job/shard transitions, shard registration, and recoverable worker leases with expiry |
