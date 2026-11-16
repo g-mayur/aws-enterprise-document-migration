@@ -8,10 +8,17 @@ locals {
   migration_dashboard_body = {
     widgets = [
       {
-        type = "metric", x = 0, y = 0, width = 12, height = 6,
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
-          title = "Step Functions executions"
-          view = "timeSeries", stacked = false, region = var.aws_region, period = 300
+          title   = "Step Functions executions"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          period  = 300
           metrics = [
             ["AWS/States", "ExecutionsStarted", "StateMachineArn", aws_sfn_state_machine.migration.arn],
             [".", "ExecutionsSucceeded", ".", "."],
@@ -21,10 +28,17 @@ locals {
         }
       },
       {
-        type = "metric", x = 12, y = 0, width = 12, height = 6,
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
-          title = "Worker cluster utilization"
-          view = "timeSeries", stacked = false, region = var.aws_region, period = 300
+          title   = "Worker cluster utilization"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          period  = 300
           metrics = [
             ["AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.migration.name],
             [".", "MemoryUtilization", ".", "."]
@@ -32,10 +46,17 @@ locals {
         }
       },
       {
-        type = "metric", x = 0, y = 6, width = 12, height = 6,
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
         properties = {
-          title = "DynamoDB throttled requests"
-          view = "timeSeries", stacked = false, region = var.aws_region, period = 300
+          title   = "DynamoDB throttled requests"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          period  = 300
           metrics = [
             for table_name in values(local.monitoring_tables) : [
               "AWS/DynamoDB", "ReadThrottleEvents", "TableName", table_name
@@ -44,10 +65,17 @@ locals {
         }
       },
       {
-        type = "metric", x = 12, y = 6, width = 12, height = 6,
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
         properties = {
-          title = "DynamoDB write throttling"
-          view = "timeSeries", stacked = false, region = var.aws_region, period = 300
+          title   = "DynamoDB write throttling"
+          view    = "timeSeries"
+          stacked = false
+          region  = var.aws_region
+          period  = 300
           metrics = [
             for table_name in values(local.monitoring_tables) : [
               "AWS/DynamoDB", "WriteThrottleEvents", "TableName", table_name
