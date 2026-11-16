@@ -8,18 +8,13 @@ A checked implementation item means the capability exists in the current starter
 - [x] DynamoDB conditional document claims, lease expiry/reclamation, attempt limits and lease-owned state transitions implemented as a repository foundation.
 - [x] Sharded migration CLI integrated with durable document state, shard leases, deterministic assignment and job finalization; end-to-end pilot validation remains required.
 - [x] Worker identity, shard/document lease renewal and fencing implemented; long-running and interrupted-worker behavior must still be exercised in the target environment.
-
-## Implemented orchestration safeguards; target-environment validation still required
-
-- [x] Step Functions retries the documented `AmazonECS.Unknown` RunTask rejection twice with exponential backoff; this is limited to ECS API launch rejections before a worker can claim a shard.
+- [x] Read-only recovery planning, immutable recovery configuration, operator-confirmed dispatch, exact-execution reconciliation, immutable audit history and bounded foreground automatic recovery are implemented as starter capabilities. AWS integration and operational behavior remain unvalidated in a target account.
 
 ## Outstanding implementation work
 
-- [x] Read-only recovery planning validates the prepared manifest fingerprint, S3 source settings and complete shard registration; explicit operator-confirmed recovery-wave dispatch uses a durable job lock and deterministic Standard Step Functions execution.
-- [ ] Post-execution recovery reconciliation and operator-facing final shard summary implemented.
 - [ ] Multipart upload resume across worker/process restarts implemented.
-- [ ] Automatic scheduled dispatch/retry and reconciliation for failed or never-started shard workers implemented.
-- [ ] Dead-letter reporting and exhausted-shard manual-review workflow implemented.
+- [ ] Unattended scheduled dispatch/retry and reconciliation implemented. This is intentionally not included in the current release; the controller is foreground and explicit opt-in only.
+- [ ] Dedicated dead-letter reporting and exhausted-shard manual-review workflow implemented.
 - [ ] Production monitoring, alarms, dashboards and operational SLOs implemented.
 
 ## Pilot and production validation
@@ -39,7 +34,6 @@ A checked implementation item means the capability exists in the current starter
 
 Do not describe this release as production-ready until all applicable implementation and validation gates pass and evidence is recorded.
 
+## Recovery implementation boundary
 
-## Recovery reconciliation milestone
-
-The operator workflow now includes `reconcile-recovery`. It verifies the persisted Step Functions execution identity and terminal status, re-reads durable shard state, and delegates job finalization to the existing conditional coordinator. The recovery-wave slot remains unavailable for another generation until reconciliation is recorded. This is application and documentation work only; no infrastructure was deployed. A non-production AWS pilot and production monitoring/operational gates remain required.
+The `auto-recover` command runs a finite sequence of dispatch, exact-execution polling, audit-backed reconciliation and fresh planning. It requires explicit confirmations and enforces wave, polling and runtime limits. It does not create AWS resources, schedule itself, reset attempts, clear leases or replay exhausted shards. A non-production AWS pilot and production monitoring/operational gates remain required.
