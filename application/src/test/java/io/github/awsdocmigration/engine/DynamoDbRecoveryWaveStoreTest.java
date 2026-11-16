@@ -137,7 +137,7 @@ class DynamoDbRecoveryWaveStoreTest {
                         Map.entry("executionStatus", AttributeValue.builder().s("SUCCEEDED").build()),
                         Map.entry("executionArn", AttributeValue.builder().s("arn:execution:1").build()),
                         Map.entry("stateMachineArn", AttributeValue.builder().s("arn:stateMachine:1").build()),
-                        Map.entry("selectedShardDigest", AttributeValue.builder().s("a".repeat(64)).build()),
+                        Map.entry("selectedShardDigest", AttributeValue.builder().s("63cbaf561c188d36f4dbafe6d8dc1bcec36aca66073c6bfd5c9787663f4efd99").build()),
                         Map.entry("selectedShardNumbers", AttributeValue.builder().l(List.of(
                                 AttributeValue.builder().n("0").build(),
                                 AttributeValue.builder().n("2").build())).build()),
