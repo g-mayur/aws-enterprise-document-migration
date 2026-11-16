@@ -2,6 +2,9 @@ package io.github.awsdocmigration.storage;
 
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
+import io.github.awsdocmigration.engine.DocumentStateStore;
+import io.github.awsdocmigration.engine.MultipartUploadCheckpoint;
+import io.github.awsdocmigration.engine.MultipartUploadContext;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +25,10 @@ import java.io.EOFException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Optional;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.TreeMap;
 
 import org.mockito.ArgumentCaptor;
 
@@ -258,5 +265,72 @@ class S3DestinationWriterTest {
         );
 
         verifyNoInteractions(s3);
+    }
+
+    @Test
+    void resumesExistingMultipartUploadAndSkipsPartsAlreadyPresentInS3()
+            throws Exception {
+        byte[] content = new byte[PART_SIZE + 1];
+        DocumentStateStore stateStore = mock(DocumentStateStore.class);
+        String fingerprint = metadataFingerprint(Map.of(
+                "document-id", "document-1",
+                "source-version-id", "version-1",
+                "sha256", SHA256));
+        MultipartUploadCheckpoint checkpoint = new MultipartUploadCheckpoint(
+                "upload-resume", BUCKET, KEY, content.length, PART_SIZE,
+                fingerprint, java.util.List.of(
+                        new MultipartUploadCheckpoint.CompletedPart(1, "old-etag-1")));
+        when(stateStore.getMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(Optional.of(checkpoint));
+        when(stateStore.saveMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any(), any()))
+                .thenReturn(true);
+        when(stateStore.clearMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any()))
+                .thenReturn(true);
+        when(s3.listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class)))
+                .thenReturn(software.amazon.awssdk.services.s3.model.ListPartsResponse.builder()
+                        .parts(software.amazon.awssdk.services.s3.model.Part.builder()
+                                .partNumber(1).eTag("remote-etag-1").build())
+                        .isTruncated(false).build());
+        when(s3.uploadPart(any(UploadPartRequest.class), any(RequestBody.class)))
+                .thenReturn(UploadPartResponse.builder().eTag("remote-etag-2").build());
+
+        MultipartUploadContext context = new MultipartUploadContext(
+                stateStore, "job-1", 0, "worker-1", "document-1",
+                "version-1", VersionIdentityType.SOURCE_VERSION);
+
+        writer.write(record(content.length), KEY,
+                new ByteArrayInputStream(content), SHA256, context);
+
+        verify(s3, never()).createMultipartUpload(any(CreateMultipartUploadRequest.class));
+        ArgumentCaptor<UploadPartRequest> partCaptor =
+                ArgumentCaptor.forClass(UploadPartRequest.class);
+        verify(s3).uploadPart(partCaptor.capture(), any(RequestBody.class));
+        assertEquals(2, partCaptor.getValue().partNumber());
+
+        ArgumentCaptor<software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest>
+                completeCaptor = ArgumentCaptor.forClass(
+                        software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.class);
+        verify(s3).completeMultipartUpload(completeCaptor.capture());
+        assertEquals(2, completeCaptor.getValue().multipartUpload().parts().size());
+        verify(stateStore).clearMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any());
+    }
+
+    private static String metadataFingerprint(Map<String, String> metadata)
+            throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        new TreeMap<>(metadata).forEach((key, value) -> {
+            digest.update(key.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            digest.update(value.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+        });
+        return java.util.HexFormat.of().formatHex(digest.digest());
     }
 }
