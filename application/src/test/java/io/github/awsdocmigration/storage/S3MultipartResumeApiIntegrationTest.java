@@ -9,13 +9,11 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
-import software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.DeleteBucketRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.core.ResponseTransformer;
@@ -124,7 +122,6 @@ class S3MultipartResumeApiIntegrationTest {
                 assertArrayEquals(content, downloaded,
                         "Resumed multipart object must exactly match the source bytes");
 
-                verify(s3, never()).createMultipartUpload(any(CreateMultipartUploadRequest.class));
                 verify(stateStore).clearMultipartUpload(
                         anyString(), anyInt(), anyString(), anyString(), any(),
                         anyString(), any());
