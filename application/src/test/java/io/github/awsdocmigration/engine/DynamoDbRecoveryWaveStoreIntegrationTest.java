@@ -120,9 +120,17 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
                     "SUCCEEDED", NOW.plusSeconds(2)
             ));
 
-            RecoveryWaveLease next = store.acquire(
+            assertTrue(store.acquire(
                     "job-race", "wave-next", "owner-next", List.of(1),
                     "recovery-job-race-next", NOW.plusSeconds(3)
+            ).isEmpty(), "A terminal execution remains locked until shard reconciliation is recorded");
+
+            RecoveryWaveSnapshot terminalWave = store.get("job-race").orElseThrow();
+            assertTrue(store.markReconciled(terminalWave, NOW.plusSeconds(3)));
+
+            RecoveryWaveLease next = store.acquire(
+                    "job-race", "wave-next", "owner-next", List.of(1),
+                    "recovery-job-race-next", NOW.plusSeconds(4)
             ).orElseThrow();
             assertEquals(winner.generation() + 1, next.generation());
         } finally {
