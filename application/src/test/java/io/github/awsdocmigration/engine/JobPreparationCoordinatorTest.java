@@ -196,6 +196,7 @@ class JobPreparationCoordinatorTest {
         private final Map<String, MigrationJobState> jobs = new HashMap<>();
         private final Map<String, MigrationShardState> shards = new HashMap<>();
         private final Map<String, ShardLease> leases = new HashMap<>();
+        private final Map<String, RecoveryJobConfiguration> recoveryConfigurations = new HashMap<>();
 
         @Override
         public boolean createJob(String jobId, int totalShards, Instant now) {
@@ -239,6 +240,29 @@ class JobPreparationCoordinatorTest {
                     canonical
             ));
             return true;
+        }
+
+        @Override
+        public boolean bindRecoveryConfiguration(
+                String jobId,
+                RecoveryJobConfiguration configuration
+        ) {
+            MigrationJobState job = jobs.get(jobId);
+            if (job == null || job.status() != MigrationJobStatus.READY
+                    || !configuration.manifestFingerprint().equals(job.manifestFingerprint())) {
+                return false;
+            }
+            RecoveryJobConfiguration existing = recoveryConfigurations.get(jobId);
+            if (existing != null) {
+                return existing.equals(configuration);
+            }
+            recoveryConfigurations.put(jobId, configuration);
+            return true;
+        }
+
+        @Override
+        public Optional<RecoveryJobConfiguration> getRecoveryConfiguration(String jobId) {
+            return Optional.ofNullable(recoveryConfigurations.get(jobId));
         }
 
         @Override
