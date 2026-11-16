@@ -9,7 +9,7 @@ import io.github.awsdocmigration.domain.VersionPolicy;
 import io.github.awsdocmigration.engine.DestinationKeyResolver;
 import io.github.awsdocmigration.engine.DocumentMigrationCoordinator;
 import io.github.awsdocmigration.engine.DocumentStateStore;
-import io.github.awsdocmigration.engine.MultipartUploadContext;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
 import io.github.awsdocmigration.engine.JobPreparationCoordinator;
