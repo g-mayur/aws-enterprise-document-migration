@@ -149,6 +149,8 @@ class DynamoDbRecoveryWaveStoreTest {
         assertEquals(2, request.getValue().transactItems().size());
         assertTrue(request.getValue().transactItems().get(0).update()
                 .conditionExpression().contains("#generation = :generation"));
+        assertTrue(request.getValue().transactItems().get(0).update()
+                .conditionExpression().contains("attribute_not_exists(#reconciliationStatus)"));
         var auditPut = request.getValue().transactItems().get(1).put();
         assertEquals("RECOVERY_RECONCILIATION#00000000000000000002#"
                         + NOW.plusSeconds(10).toEpochMilli(),
