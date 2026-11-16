@@ -423,6 +423,19 @@ class DynamoDbJobStateStoreIntegrationTest {
         assertFalse(store.bindRecoveryConfiguration("not-ready-config-job", configuration));
         assertTrue(store.getRecoveryConfiguration("not-ready-config-job").isEmpty());
         assertFalse(store.bindRecoveryConfiguration("missing-config-job", configuration));
+
+        assertTrue(store.createJob("fingerprint-mismatch-config-job", 0, NOW));
+        assertTrue(store.bindManifestFingerprint(
+                "fingerprint-mismatch-config-job", "f".repeat(64)));
+        assertTrue(store.transitionJob("fingerprint-mismatch-config-job",
+                MigrationJobStatus.CREATED, MigrationJobStatus.DISCOVERING,
+                NOW.plusSeconds(1), null));
+        assertTrue(store.transitionJob("fingerprint-mismatch-config-job",
+                MigrationJobStatus.DISCOVERING, MigrationJobStatus.READY,
+                NOW.plusSeconds(2), null));
+        assertFalse(store.bindRecoveryConfiguration(
+                "fingerprint-mismatch-config-job", configuration));
+        assertTrue(store.getRecoveryConfiguration("fingerprint-mismatch-config-job").isEmpty());
     }
 
     @Test
