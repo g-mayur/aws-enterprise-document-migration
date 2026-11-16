@@ -29,9 +29,9 @@ The command does not accept a user-supplied execution ARN. It reads the latest w
 5. Read the job and all registered shards through the existing consistent-read state store.
 6. Classify every shard as completed, retryable, active, blocked due to unknown lease expiry, or attempts exhausted.
 7. Call `JobFinalizationCoordinator.finalizeIfReady`. It verifies the complete contiguous shard registry and only finalizes when every shard is either completed or failed after the shard-attempt limit.
-8. Mark the wave `RECONCILED` using a conditional update fenced by its generation and wave ID.
+8. Atomically mark the wave `RECONCILED` and write an immutable audit item in the same DynamoDB transaction. The transaction is fenced by job, generation, wave ID, terminal execution status, and the absence of a prior reconciliation marker.
 
-The recovery-wave slot cannot be acquired for another generation until the previous terminal wave is marked `RECONCILED`. This closes the gap between Step Functions finishing and the operator reviewing durable shard state. A failed or interrupted reconciliation leaves the slot unavailable; rerun reconciliation after investigating the cause. Do not edit or delete the wave item manually.
+The recovery-wave slot cannot be acquired for another generation until the previous terminal wave is marked `RECONCILED`. The audit record and slot release commit together: if the process stops before the transaction commits, neither change is visible and the operator can safely rerun reconciliation. Concurrent reconciliation attempts may both inspect state, but only one can commit because the wave update requires that no reconciliation marker exists. The job finalizer remains conditional and idempotent. Do not edit or delete the wave item manually.
 
 ## Report fields
 
@@ -43,6 +43,12 @@ The recovery-wave slot cannot be acquired for another generation until the previ
 - `jobFinalization`: final job status, `WAITING_FOR_SHARDS`, or a not-ready job state.
 
 The report reflects durable shard state at reconciliation time. Workers may still be running when an active lease is reported; do not dispatch a replacement for those shards. A subsequent recovery plan can be reviewed after the wave is reconciled and any active leases have expired.
+
+## Durable audit history
+
+Each successful reconciliation writes a separate item to the existing job-state DynamoDB table. The partition key is `JOB#<job-id>` and the sort key is `RECOVERY_RECONCILIATION#<generation>#<epoch-milliseconds>`. Items are immutable and include the wave ID, generation, reconciliation time, terminal execution status, all shard disposition counts, and the finalization result. The wave-state update and audit-item creation use one `TransactWriteItems` request, so an audit record cannot be written without releasing the matching wave slot, and the slot cannot be released without its audit record.
+
+To review the history, query the job-state table for the job partition and the `RECOVERY_RECONCILIATION#` sort-key prefix. The records provide a per-generation operator audit trail; they do not contain document content or credentials.
 
 ## Operational notes
 
