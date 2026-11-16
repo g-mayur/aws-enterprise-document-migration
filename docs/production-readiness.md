@@ -5,7 +5,7 @@ A checked implementation item means the capability exists in the current starter
 ## Implementation present; target-environment validation still required
 
 - [x] Sequential multipart upload implemented for large objects; production integration and load validation remain required.
-- [x] Durable multipart checkpoint model and lease-fenced DynamoDB persistence implemented in the existing document-state table; S3 writer resume integration remains outstanding.
+- [x] Durable multipart checkpoint persistence and S3 writer resume integration implemented for context-backed sharded execution; the writer reconciles remote S3 parts and validates their part numbers and expected sizes. Target-account restart, interruption and load validation remain required.
 - [x] DynamoDB conditional document claims, lease expiry/reclamation, attempt limits and lease-owned state transitions implemented as a repository foundation.
 - [x] Sharded migration CLI integrated with durable document state, shard leases, deterministic assignment and job finalization; end-to-end pilot validation remains required.
 - [x] Worker identity, shard/document lease renewal and fencing implemented; long-running and interrupted-worker behavior must still be exercised in the target environment.
@@ -14,7 +14,7 @@ A checked implementation item means the capability exists in the current starter
 
 ## Outstanding implementation work
 
-- [ ] Multipart upload resume across worker/process restarts implemented.
+- [x] Multipart upload resume across worker/process restarts implemented for context-backed sharded execution; target AWS validation remains required.
 - [ ] Unattended scheduled dispatch/retry and reconciliation implemented. This is intentionally not included in the current release; the controller is foreground and explicit opt-in only.
 - [x] Dedicated dead-letter reporting and exhausted-shard manual-review metadata implemented in the existing job-state table; operational ownership and target-environment procedures still require validation.
 - [ ] Application-level metrics for document success/failure, migration latency, checksum mismatches, queue age and dead-letter backlog implemented and calibrated into production SLOs.
