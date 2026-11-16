@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import io.github.awsdocmigration.domain.MigrationJobStatus;
 import io.github.awsdocmigration.domain.MigrationShardStatus;
 import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 
 import java.nio.file.Path;
 import java.time.Duration;
