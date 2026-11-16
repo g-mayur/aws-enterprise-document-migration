@@ -317,7 +317,7 @@ class S3DestinationWriterTest {
                         software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.class);
         verify(s3).completeMultipartUpload(completeCaptor.capture());
         assertEquals(2, completeCaptor.getValue().multipartUpload().parts().size());
-        verify(stateStore).clearMultipartUpload(
+        verify(stateStore, times(2)).clearMultipartUpload(
                 anyString(), anyInt(), anyString(), anyString(), any(),
                 anyString(), any());
     }
