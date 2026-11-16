@@ -7,7 +7,8 @@ The CLI provides read-only planning, explicitly confirmed single-wave dispatch, 
 - `configure-recovery`: validates the S3 manifest fingerprint and Standard state machine, then conditionally stores the immutable recovery configuration for a `READY` job.
 - `plan-recovery`: read-only validation and shard eligibility report.
 - `dispatch-recovery`: starts one recovery wave only after explicit operator confirmation.
-- `reconcile-recovery`: verifies the terminal execution and commits the durable reconciliation audit.\n- `auto-recover`: runs a finite sequence of dispatch, exact-execution polling, reconciliation, and fresh planning passes under explicit wave and runtime ceilings.
+- `reconcile-recovery`: verifies the terminal execution and commits the durable reconciliation audit.
+- `auto-recover`: runs a finite sequence of dispatch, exact-execution polling, reconciliation, and fresh planning passes under explicit wave and runtime ceilings.
 
 The workflow validates the prepared job, exact manifest SHA-256 fingerprint, source bucket and prefix recorded by the S3 manifest, and complete contiguous shard registration. It selects only shards classified as pending, retryable failures, or running with an expired lease and remaining shard claims.
 
@@ -168,10 +169,6 @@ The controller stops when the job is terminal, no eligible shards remain, active
 
 This is not permission to schedule unattended production recovery. Validate the controller with DynamoDB Local tests and a controlled non-production AWS pilot before considering any scheduled use.
 
-## Operational enablement remains gated\n\n
+## Operational enablement remains gated
 
-The current commands remain operator-driven: plan-recovery, dispatch-recovery, and reconcile-recovery. Do not schedule or loop these commands unattended.
-
-The next automation milestone must implement the finite control loop and stop conditions in shard-recovery-design.md, using the persisted immutable configuration. In particular, unattended execution must not repeatedly dispatch while leases are active or unknown, and it must stop on ambiguous Step Functions outcomes while retaining the durable wave lock.
-
-Until those gates are implemented and validated in a non-production AWS account, continue to review each plan and explicitly authorize each recovery wave.
+The `auto-recover` command is explicitly invoked and bounded, but it is not a background scheduler and must not be scheduled unattended. Production enablement remains gated on the full validation and non-production AWS pilot described in shard-recovery-design.md. Continue to review the job configuration and require explicit authorization before each controller run.
