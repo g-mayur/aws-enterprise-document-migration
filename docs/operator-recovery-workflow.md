@@ -78,7 +78,7 @@ The command:
 4. Acquires the durable job-scoped recovery-wave lock in the existing job-state table.
 5. Starts or resolves the deterministic Step Functions execution using the fail-closed dispatcher.
 
-The Map concurrency ceiling remains the value configured in the deployed state machine. The operator command does not override it.
+The Map concurrency ceiling remains the value configured in the deployed state machine. The operator command does not override it. The generated execution input is checked against the Step Functions 256 KiB payload limit before the recovery-wave lock is acquired.
 
 If another recovery wave is active, no new execution is started. If the Step Functions start outcome cannot be confirmed, the wave remains ACTIVE/UNKNOWN and the command reports that manual inspection is required. Do not delete or edit the recovery-wave record to force another run.
 
@@ -98,7 +98,7 @@ See [recovery-operator-policy.json](recovery-operator-policy.json).
 - Source bucket and prefix are verified against the manifest. Destination bucket and version policy are operator-supplied because they are not stored in the prepared job.
 - The exact manifest is re-verified by workers before they claim shards. If the S3 object changes after planning, workers reject the changed fingerprint.
 - A recovery wave starting successfully does not prove any shard was claimed or migrated.
-- This milestone does not perform post-execution reconciliation or job finalization. Re-read the durable job and shard state after the execution; the next milestone will add that reconciliation workflow.
+- This milestone does not automatically re-read shard state or invoke the existing job finalization coordinator after the execution. Reconcile the durable job and shard state manually after the execution; the next milestone will automate this integration.
 - Do not treat a terminal Step Functions status as proof that all shards are terminal.
 - CI tests use mocked AWS clients and local test fixtures. They do not prove behavior in an AWS account. Run a small non-production pilot before operational use.
 - No production data, AWS deployment, or live migration is accessed or started by CI.
