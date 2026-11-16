@@ -1,6 +1,5 @@
 package io.github.awsdocmigration.engine;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.awsdocmigration.domain.MigrationJobStatus;
 import io.github.awsdocmigration.domain.MigrationShardStatus;
 import org.junit.jupiter.api.BeforeEach;
