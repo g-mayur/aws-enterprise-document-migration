@@ -1,7 +1,6 @@
 package io.github.awsdocmigration.engine;
 
 import io.github.awsdocmigration.domain.MigrationJobStatus;
-import io.github.awsdocmigration.domain.MigrationShardStatus;
 import software.amazon.awssdk.services.sfn.SfnClient;
 import software.amazon.awssdk.services.sfn.model.DescribeExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.ExecutionStatus;
