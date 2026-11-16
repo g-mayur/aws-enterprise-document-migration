@@ -373,10 +373,15 @@ public final class MigrationCli {
         String jobId = required(arguments, "job-id");
         String jobStateTable = required(arguments, "job-state-table");
         String manifestS3Uri = required(arguments, "manifest-s3-uri");
+        String sourceBucket = required(arguments, "source-bucket");
+        String sourcePrefix = requiredPresent(arguments, "source-prefix");
+        JobStateStore store = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+
         Path manifestPath = resolveManifestPath(s3, arguments);
-        String fingerprint;
+        RecoveryWavePlanner.Plan verifiedPlan;
         try {
-            fingerprint = ManifestFingerprint.calculate(manifestPath);
+            verifiedPlan = new RecoveryWavePlanner(store).plan(
+                    jobId, manifestPath, sourceBucket, sourcePrefix, Instant.now());
         } finally {
             Files.deleteIfExists(manifestPath);
         }
@@ -390,9 +395,9 @@ public final class MigrationCli {
         }
 
         RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
-                fingerprint,
-                required(arguments, "source-bucket"),
-                requiredPresent(arguments, "source-prefix"),
+                verifiedPlan.manifestFingerprint(),
+                sourceBucket,
+                sourcePrefix,
                 required(arguments, "destination-bucket"),
                 manifestS3Uri,
                 required(arguments, "state-table"),
@@ -405,14 +410,9 @@ public final class MigrationCli {
                 parsePositiveInt(required(arguments, "max-concurrent-shards"), "max-concurrent-shards")
         );
 
-        JobStateStore store = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
-        MigrationJobState job = store.getJob(jobId).orElseThrow(() ->
-                new IllegalArgumentException("Migration job was not found: " + jobId));
-        if (job.status() != MigrationJobStatus.READY
-                || job.manifestFingerprint() == null
-                || !job.manifestFingerprint().equals(fingerprint)) {
+        if (verifiedPlan.job().status() != MigrationJobStatus.READY) {
             throw new IllegalStateException(
-                    "Recovery configuration requires a READY job with the exact prepared manifest fingerprint");
+                    "Recovery configuration can only be bound before the job starts running");
         }
         if (!store.bindRecoveryConfiguration(jobId, configuration)) {
             throw new IllegalStateException(
@@ -420,7 +420,8 @@ public final class MigrationCli {
         }
         System.out.printf(
                 "Immutable recovery configuration bound. job=%s manifestSha256=%s stateMachine=%s maxConcurrentShards=%d%n",
-                jobId, fingerprint, stateMachineArn, configuration.maximumConcurrentShards());
+                jobId, verifiedPlan.manifestFingerprint(), stateMachineArn,
+                configuration.maximumConcurrentShards());
     }
 
     private static void prepareJob(
