@@ -16,7 +16,7 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
-import software.amazon.awssdk.core.ResponseTransformer;
+import software.amazon.awssdk.core.sync.ResponseTransformer;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -84,7 +84,7 @@ class S3MultipartResumeApiIntegrationTest {
                 long partSize = PART_SIZE;
                 String fingerprint = metadataFingerprint(metadata);
                 MultipartUploadCheckpoint persisted = new MultipartUploadCheckpoint(
-                        uploadId, bucket, key, content.length, partSize, fingerprint,
+                        uploadId, bucket, key, (long) content.length, partSize, fingerprint,
                         java.util.List.of(new MultipartUploadCheckpoint.CompletedPart(
                                 1, firstPart.eTag())));
 
