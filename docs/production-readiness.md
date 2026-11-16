@@ -15,7 +15,7 @@ A checked implementation item means the capability exists in the current starter
 
 - [ ] Multipart upload resume across worker/process restarts implemented.
 - [ ] Unattended scheduled dispatch/retry and reconciliation implemented. This is intentionally not included in the current release; the controller is foreground and explicit opt-in only.
-- [ ] Dedicated dead-letter reporting and exhausted-shard manual-review workflow implemented.
+- [x] Dedicated dead-letter reporting and exhausted-shard manual-review metadata implemented in the existing job-state table; operational ownership and target-environment procedures still require validation.
 - [ ] Production monitoring, alarms, dashboards and operational SLOs implemented.
 
 ## Pilot and production validation

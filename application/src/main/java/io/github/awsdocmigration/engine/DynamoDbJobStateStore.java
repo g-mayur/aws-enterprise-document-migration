@@ -382,6 +382,77 @@ public final class DynamoDbJobStateStore implements JobStateStore {
     }
 
     @Override
+    public List<DeadLetterShard> listDeadLetterShards(String jobId) {
+        requireText(jobId, "jobId");
+        return listShards(jobId).stream()
+                .filter(shard -> shard.status() == MigrationShardStatus.FAILED)
+                .filter(shard -> shard.attemptCount() >= MAX_SHARD_ATTEMPTS)
+                .map(shard -> new DeadLetterShard(
+                        shard.jobId(),
+                        shard.shardNumber(),
+                        shard.attemptCount(),
+                        shard.lastError(),
+                        shard.createdAtEpochMillis(),
+                        shard.updatedAtEpochMillis(),
+                        shard.reviewedBy(),
+                        shard.reviewNote(),
+                        shard.reviewedAtEpochMillis()))
+                .toList();
+    }
+
+    @Override
+    public boolean markShardReviewed(
+            String jobId,
+            int shardNumber,
+            String reviewer,
+            String reviewNote,
+            Instant now
+    ) {
+        validateShard(jobId, shardNumber);
+        requireText(reviewer, "reviewer");
+        Objects.requireNonNull(now, "Review time is required");
+        if (reviewer.length() > 256) {
+            throw new IllegalArgumentException("reviewer must not exceed 256 characters");
+        }
+        if (reviewNote != null && reviewNote.length() > MAX_ERROR_LENGTH) {
+            throw new IllegalArgumentException(
+                    "reviewNote must not exceed " + MAX_ERROR_LENGTH + " characters");
+        }
+
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":failed", s(MigrationShardStatus.FAILED.name()));
+        values.put(":maxAttempts", n(MAX_SHARD_ATTEMPTS));
+        values.put(":reviewer", s(reviewer));
+        values.put(":now", n(now.toEpochMilli()));
+
+        values.put(":reviewNote", s(reviewNote == null ? "" : reviewNote));
+        String updateExpression = "SET #reviewedBy = :reviewer, #reviewedAt = :now, "
+                + "#updatedAt = :now, #reviewNote = :reviewNote";
+
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(jobId, shardKey(shardNumber)))
+                    .updateExpression(updateExpression)
+                    .conditionExpression(
+                            "#status = :failed AND #attemptCount >= :maxAttempts "
+                                    + "AND attribute_not_exists(#reviewedAt)")
+                    .expressionAttributeNames(Map.of(
+                            "#status", "status",
+                            "#attemptCount", "attemptCount",
+                            "#reviewedBy", "reviewedBy",
+                            "#reviewedAt", "reviewedAt",
+                            "#reviewNote", "reviewNote",
+                            "#updatedAt", "updatedAt"))
+                    .expressionAttributeValues(values)
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException notExhaustedOrAlreadyReviewed) {
+            return false;
+        }
+    }
+
+    @Override
     public Optional<ShardLease> claimShard(
             String jobId,
             int shardNumber,
@@ -734,7 +805,10 @@ public final class DynamoDbJobStateStore implements JobStateStore {
                 integer(item, "attemptCount"),
                 number(item, "createdAt"),
                 number(item, "updatedAt"),
-                nullableNumber(item, "leaseExpiresAt")
+                nullableNumber(item, "leaseExpiresAt"),
+                nullableText(item, "reviewedBy"),
+                nullableText(item, "reviewNote"),
+                nullableNumber(item, "reviewedAt")
         );
     }
 

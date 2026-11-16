@@ -59,6 +59,22 @@ public interface JobStateStore {
     List<MigrationShardState> listShards(String jobId);
 
     /**
+     * Lists terminal FAILED shards that have exhausted the retry budget.
+     * Results are ordered by shard number and include manual-review metadata.
+     */
+    List<DeadLetterShard> listDeadLetterShards(String jobId);
+
+    /**
+     * Records an operator's manual review without changing shard status,
+     * attempt count, lease state, or retry eligibility.
+     *
+     * @return false if the shard is not exhausted/FAILED or was already reviewed
+     */
+    boolean markShardReviewed(
+            String jobId, int shardNumber, String reviewer, String reviewNote, Instant now
+    );
+
+    /**
      * Atomically claims a pending or previously failed shard, or reclaims a
      * running shard whose lease has expired, while fewer than three total
      * claims have been made. Each successful claim increments the persisted
