@@ -17,7 +17,7 @@ No Terraform, IAM role, AWS resource, deployment, or live migration is changed b
 
 ## Required operator inputs
 
-The prepared job stores the immutable manifest fingerprint and shard plan. The separate immutable recovery-configuration item now stores the source/destination settings and execution limits after `configure-recovery` succeeds. The current `dispatch-recovery` command remains operator-driven and still requires explicit settings; automatic dispatch does not yet consume this stored configuration.
+The prepared job stores the immutable manifest fingerprint and shard plan. The separate immutable recovery-configuration item now stores the source/destination settings and execution limits after `configure-recovery` succeeds. The `dispatch-recovery` command remains operator-driven, but now loads all execution settings from this immutable record. It accepts only the job ID, job-state table, AWS Region, and explicit safety confirmations; source, destination, manifest, state-machine, version, lease, and attempt settings are not accepted as dispatch overrides.
 
 - Job ID and job-state DynamoDB table.
 - Exact manifest S3 URI.
@@ -29,7 +29,7 @@ The prepared job stores the immutable manifest fingerprint and shard plan. The s
 - Standard Step Functions state machine ARN for dispatch.
 - Explicit confirmation that any previous execution for this job has reached a terminal state.
 
-The destination bucket, version policy, lease duration and document-attempt limit are not derivable from the prepared job. The configure command records the operator-supplied values as the immutable recovery configuration, so verify them against the original migration deployment before binding. The current dispatch command still takes explicit values; the next milestone will make dispatch consume the persisted record.
+The destination bucket, version policy, lease duration, document-attempt limit, concurrency ceiling, and state-machine ARN are not derivable from the prepared job. The configure command records the operator-supplied values as the immutable recovery configuration, so verify them against the original migration deployment before binding. Dispatch reads these values from DynamoDB and rejects a mismatched job-state table or runtime Region. It also recalculates the manifest fingerprint before acquiring the recovery-wave lock.
 
 The manifest must be an S3-source manifest with an explicit immutable source version or snapshot identity for each record. Legacy records without this identity are rejected.
 
@@ -93,15 +93,6 @@ java -jar target/document-migration-worker.jar \
   --confirm-prior-execution-terminal true \
   --job-id job-001 \
   --job-state-table migration-job-state \
-  --state-table migration-document-state \
-  --manifest-s3-uri s3://migration-staging/manifests/job-001.jsonl \
-  --source-bucket source-bucket \
-  --source-prefix "exports/" \
-  --destination-bucket destination-bucket \
-  --version-policy ALL_VERSIONS \
-  --lease-seconds 300 \
-  --max-attempts 5 \
-  --state-machine-arn arn:aws:states:us-east-1:123456789012:stateMachine:document-migration-shard-orchestration \
   --region us-east-1
 ```
 
@@ -114,7 +105,7 @@ The command:
 5. Acquires the durable job-scoped recovery-wave lock in the existing job-state table.
 6. Starts or resolves the deterministic Step Functions execution using the fail-closed dispatcher.
 
-The Map concurrency ceiling remains the value configured in the deployed state machine. The operator command does not override it. The generated execution input is checked against the Step Functions 256 KiB payload limit before the recovery-wave lock is acquired.
+The Map concurrency ceiling remains the value configured in the deployed state machine. Its intended value is stored in the immutable recovery configuration; the operator command does not override it. The generated execution input is checked against the Step Functions 256 KiB payload limit before the recovery-wave lock is acquired.
 
 If another recovery wave is active, or a running Step Functions execution for the same job is found, no new execution is started. The execution-list preflight is eventually consistent; before dispatch, independently verify in Step Functions that the previous execution for this job is terminal, then provide the explicit confirmation flag. If the Step Functions start outcome cannot be confirmed, the wave remains ACTIVE/UNKNOWN and the command reports that manual inspection is required. Do not delete or edit the recovery-wave record to force another run.
 
@@ -131,7 +122,7 @@ See [recovery-operator-policy.json](recovery-operator-policy.json).
 
 ## Important operational limitations
 
-- Source bucket and prefix are verified against the manifest. Destination bucket and version policy are operator-supplied because they are not stored in the prepared job.
+- Source bucket and prefix are verified against the manifest. Destination bucket and version policy are stored in the immutable recovery configuration because they are not stored in the prepared job.
 - The exact manifest is re-verified by workers before they claim shards. If the S3 object changes after planning, workers reject the changed fingerprint.
 - A recovery wave starting successfully does not prove any shard was claimed or migrated.
 - This milestone does not automatically re-read shard state or invoke the existing job finalization coordinator after the execution. Reconcile the durable job and shard state manually after the execution; the next milestone will automate this integration.
@@ -158,6 +149,6 @@ The command reads the execution ARN and state-machine ARN from the durable recov
 
 The current commands remain operator-driven: plan-recovery, dispatch-recovery, and reconcile-recovery. Do not schedule or loop these commands unattended.
 
-The next automation milestone must first persist and verify an immutable recovery configuration for the prepared job. It must then implement the finite control loop and stop conditions in shard-recovery-design.md. In particular, unattended execution must not repeatedly dispatch while leases are active or unknown, and it must stop on ambiguous Step Functions outcomes while retaining the durable wave lock.
+The next automation milestone must implement the finite control loop and stop conditions in shard-recovery-design.md, using the persisted immutable configuration. In particular, unattended execution must not repeatedly dispatch while leases are active or unknown, and it must stop on ambiguous Step Functions outcomes while retaining the durable wave lock.
 
 Until those gates are implemented and validated in a non-production AWS account, continue to review each plan and explicitly authorize each recovery wave.

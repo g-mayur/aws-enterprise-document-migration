@@ -5,6 +5,8 @@ import io.github.awsdocmigration.connector.DocumentSource;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
 import io.github.awsdocmigration.engine.ManifestReader;
+import io.github.awsdocmigration.engine.RecoveryJobConfiguration;
+import io.github.awsdocmigration.domain.VersionPolicy;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -243,6 +245,34 @@ class MigrationCliTest {
                         "confirm-recovery", "true",
                         "confirm-prior-execution-terminal", "true"))
         );
+    }
+
+    @Test
+    void recoveryDispatchRequiresMatchingImmutableConfigurationTableAndRegion() {
+        RecoveryJobConfiguration configuration = new RecoveryJobConfiguration(
+                "a".repeat(64),
+                "source-bucket",
+                "exports/",
+                "destination-bucket",
+                "s3://staging/manifests/job-1.jsonl",
+                "document-state",
+                "job-state",
+                "arn:aws:states:us-east-1:123456789012:stateMachine:migration",
+                VersionPolicy.ALL_VERSIONS,
+                "us-east-1",
+                300,
+                5,
+                20
+        );
+
+        assertDoesNotThrow(() -> MigrationCli.validateRecoveryConfiguration(
+                configuration, "job-state", "us-east-1"));
+        assertThrows(IllegalArgumentException.class, () -> MigrationCli.validateRecoveryConfiguration(
+                configuration, "different-job-state", "us-east-1"));
+        assertThrows(IllegalArgumentException.class, () -> MigrationCli.validateRecoveryConfiguration(
+                configuration, "job-state", "us-west-2"));
+        assertThrows(IllegalArgumentException.class, () -> MigrationCli.validateRecoveryConfiguration(
+                null, "job-state", "us-east-1"));
     }
 
     @Test
