@@ -34,6 +34,5 @@ jobs:
           cache: maven
           cache-dependency-path: application/pom.xml
 
-      - name: Build and run unit and integration tests
-        working-directory: application
-        run: mvn --batch-mode clean verify
+      - name: Run repository local validation
+        run: bash scripts/local-validate.sh
