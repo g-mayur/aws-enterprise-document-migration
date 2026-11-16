@@ -10,7 +10,7 @@ This guide covers cloning the repository, building the Java application and runn
 - Docker Desktop or Docker Engine (recommended for DynamoDB integration tests)
 - Terraform (optional; used only for the infrastructure formatting check)
 
-The application is built for Java 17. The CI workflow uses Temurin 17 and Maven.
+The application is built for Java 17. The Java Build and Validation CI workflow runs this same repository validation script with Temurin 17 and a DynamoDB Local service.
 
 ## Clone and validate
 
@@ -27,7 +27,7 @@ bash scripts/local-validate.sh
 
 The script:
 
-1. Checks that Java 17+ and Maven are installed.
+1. Checks that Java 17+ and Maven 3.9+ are installed.
 2. Uses an existing DynamoDB Local endpoint supplied through `DYNAMODB_LOCAL_ENDPOINT`, or a service already listening on port `8000`.
 3. If neither is available and Docker is running, starts a temporary DynamoDB Local container using the same image version as CI, waits for it, and removes only the container it started.
 4. Runs `mvn --batch-mode clean verify` for the application.
@@ -73,7 +73,7 @@ If you do not have an AWS account or an approved role, stop after local validati
 | Symptom | What to check |
 |---|---|
 | `java: command not found` or Java version below 17 | Install a JDK 17+ and confirm `java -version` and `JAVA_HOME` point to it |
-| `mvn: command not found` | Install Maven 3.9+ and confirm `mvn -version` |
+| `mvn: command not found` or Maven version below 3.9 | Install Maven 3.9+ and confirm `mvn -version` |
 | Docker daemon unavailable | Start Docker Desktop/Engine; otherwise run Maven directly and note that DynamoDB integration tests are skipped |
 | Port 8000 is already in use | Stop the conflicting service or configure a separate DynamoDB Local endpoint and export `DYNAMODB_LOCAL_ENDPOINT` |
 | DynamoDB integration tests cannot connect | Confirm the endpoint is reachable and DynamoDB Local is ready before running Maven |
