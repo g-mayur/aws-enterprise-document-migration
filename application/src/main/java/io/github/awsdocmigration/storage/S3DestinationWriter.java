@@ -193,9 +193,7 @@ public final class S3DestinationWriter implements DestinationWriter {
                         remoteEtags.clear();
                     }
                 } else {
-                    s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
-                            .bucket(candidate.bucket()).key(candidate.key())
-                            .uploadId(candidate.uploadId()).build());
+                    abortExistingUpload(candidate.bucket(), candidate.key(), candidate.uploadId());
                     requireCheckpointClear(context);
                 }
             }
@@ -211,8 +209,18 @@ public final class S3DestinationWriter implements DestinationWriter {
             }
             uploadId = created.uploadId();
             if (context != null) {
-                requireCheckpointSave(context, new MultipartUploadCheckpoint(
-                        uploadId, bucket, key, contentLength, partSize, fingerprint, List.of()));
+                try {
+                    requireCheckpointSave(context, new MultipartUploadCheckpoint(
+                            uploadId, bucket, key, contentLength, partSize, fingerprint, List.of()));
+                } catch (Exception checkpointFailure) {
+                    try {
+                        s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                                .bucket(bucket).key(key).uploadId(uploadId).build());
+                    } catch (Exception abortFailure) {
+                        checkpointFailure.addSuppressed(abortFailure);
+                    }
+                    throw checkpointFailure;
+                }
             }
         }
 
@@ -276,6 +284,17 @@ public final class S3DestinationWriter implements DestinationWriter {
                 }
             }
             throw failure;
+        }
+    }
+
+    private void abortExistingUpload(String uploadBucket, String uploadKey, String uploadId) {
+        try {
+            s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                    .bucket(uploadBucket).key(uploadKey).uploadId(uploadId).build());
+        } catch (S3Exception failure) {
+            String code = failure.awsErrorDetails() == null
+                    ? null : failure.awsErrorDetails().errorCode();
+            if (!"NoSuchUpload".equals(code)) throw failure;
         }
     }
 
