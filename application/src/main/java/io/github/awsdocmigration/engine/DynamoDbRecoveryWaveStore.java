@@ -191,6 +191,63 @@ public final class DynamoDbRecoveryWaveStore {
     }
 
     /**
+     * Persists an observation made against the exact execution ARN already
+     * bound to the active wave. This is used by the bounded controller while
+     * polling; it cannot update a newer generation or a different execution.
+     */
+    public boolean recordObservedExecutionStatus(
+            RecoveryWaveSnapshot snapshot,
+            String executionArn,
+            String executionStatus,
+            Instant now
+    ) {
+        Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");
+        Objects.requireNonNull(now, "Observation time is required");
+        requireText(executionArn, "executionArn");
+        if (!List.of("RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED")
+                .contains(executionStatus)) {
+            throw new IllegalArgumentException("Unsupported observed execution status: " + executionStatus);
+        }
+        if (!"ACTIVE".equals(snapshot.state())
+                || snapshot.executionArn() == null
+                || !snapshot.executionArn().equals(executionArn)) {
+            return false;
+        }
+        boolean terminal = TERMINAL_EXECUTION_STATUSES.contains(executionStatus);
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(snapshot.jobId()))
+                    .updateExpression("SET #executionStatus = :status, #state = :nextState, #updatedAt = :now")
+                    .conditionExpression(
+                            "#state = :active AND #generation = :generation "
+                                    + "AND #waveId = :waveId AND #executionArn = :executionArn"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#state", "state",
+                            "#generation", "generation",
+                            "#waveId", "waveId",
+                            "#executionArn", "executionArn",
+                            "#executionStatus", "executionStatus",
+                            "#updatedAt", "updatedAt"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":active", s("ACTIVE"),
+                            ":generation", n(snapshot.generation()),
+                            ":waveId", s(snapshot.waveId()),
+                            ":executionArn", s(executionArn),
+                            ":status", s(executionStatus),
+                            ":nextState", s(terminal ? "TERMINAL" : "ACTIVE"),
+                            ":now", n(now.toEpochMilli())
+                    ))
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException staleObservation) {
+            return false;
+        }
+    }
+
+    /**
      * Binds the exact Step Functions request to the current wave before any
      * network call is made. Repeated calls are accepted only when both values
      * match, preventing a retry from reusing an execution name with changed
