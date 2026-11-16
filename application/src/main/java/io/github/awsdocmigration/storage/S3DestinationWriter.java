@@ -1,6 +1,7 @@
 package io.github.awsdocmigration.storage;
 
 import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.engine.MultipartUploadCheckpoint;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
@@ -9,6 +10,12 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.Optional;
+import java.util.TreeMap;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -91,6 +98,16 @@ public final class S3DestinationWriter implements DestinationWriter {
             InputStream content,
             String sha256
     ) throws Exception {
+        write(record, key, content, sha256, null);
+    }
+
+    public void write(
+            DocumentRecord record,
+            String key,
+            InputStream content,
+            String sha256,
+            MultipartUploadContext context
+    ) throws Exception {
 
         Objects.requireNonNull(record, "Document record is required");
         Objects.requireNonNull(content, "Document content stream is required");
@@ -120,7 +137,7 @@ public final class S3DestinationWriter implements DestinationWriter {
             return;
         }
 
-        uploadMultipart(key, content, record.sizeBytes(), metadata);
+        uploadMultipart(key, content, record.sizeBytes(), metadata, context);
     }
 
     private void putSingleObject(
@@ -143,116 +160,204 @@ public final class S3DestinationWriter implements DestinationWriter {
     }
 
     private void uploadMultipart(
-            String key,
-            InputStream content,
-            long contentLength,
-            Map<String, String> metadata
+            String key, InputStream content, long contentLength,
+            Map<String, String> metadata, MultipartUploadContext context
     ) throws Exception {
-
         long partSize = calculatePartSize(contentLength);
+        String fingerprint = metadataFingerprint(metadata);
+        String uploadId = null;
+        Map<Integer, String> remoteEtags = new TreeMap<>();
 
-        CreateMultipartUploadResponse created = s3.createMultipartUpload(
-                CreateMultipartUploadRequest.builder()
-                        .bucket(bucket)
-                        .key(key)
-                        .serverSideEncryption(ServerSideEncryption.AES256)
-                        .metadata(metadata)
-                        .build()
-        );
-
-        if (created == null || created.uploadId() == null
-                || created.uploadId().isBlank()) {
-            throw new IllegalStateException(
-                    "S3 did not return a multipart upload ID"
-            );
+        if (context != null) {
+            Optional<MultipartUploadCheckpoint> saved = context.load();
+            if (saved.isPresent()) {
+                MultipartUploadCheckpoint candidate = saved.get();
+                boolean compatible = candidate.bucket().equals(bucket)
+                        && candidate.key().equals(key)
+                        && candidate.contentLength() == contentLength
+                        && candidate.partSize() == partSize
+                        && candidate.metadataFingerprint().equals(fingerprint);
+                if (compatible) {
+                    uploadId = candidate.uploadId();
+                    try {
+                        for (CompletedPart part : listRemoteParts(key, uploadId)) {
+                            remoteEtags.put(part.partNumber(), part.eTag());
+                        }
+                    } catch (S3Exception failure) {
+                        String code = failure.awsErrorDetails() == null
+                                ? null : failure.awsErrorDetails().errorCode();
+                        if (!"NoSuchUpload".equals(code)) throw failure;
+                        requireCheckpointClear(context);
+                        uploadId = null;
+                        remoteEtags.clear();
+                    }
+                } else {
+                    abortExistingUpload(candidate.bucket(), candidate.key(), candidate.uploadId());
+                    requireCheckpointClear(context);
+                }
+            }
         }
 
-        String uploadId = created.uploadId();
-        List<CompletedPart> completedParts = new ArrayList<>();
-        long remaining = contentLength;
+        if (uploadId == null) {
+            CreateMultipartUploadResponse created = s3.createMultipartUpload(
+                    CreateMultipartUploadRequest.builder().bucket(bucket).key(key)
+                            .serverSideEncryption(ServerSideEncryption.AES256)
+                            .metadata(metadata).build());
+            if (created == null || created.uploadId() == null || created.uploadId().isBlank()) {
+                throw new IllegalStateException("S3 did not return a multipart upload ID");
+            }
+            uploadId = created.uploadId();
+            if (context != null) {
+                try {
+                    requireCheckpointSave(context, new MultipartUploadCheckpoint(
+                            uploadId, bucket, key, contentLength, partSize, fingerprint, List.of()));
+                } catch (Exception checkpointFailure) {
+                    try {
+                        s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                                .bucket(bucket).key(key).uploadId(uploadId).build());
+                    } catch (Exception abortFailure) {
+                        checkpointFailure.addSuppressed(abortFailure);
+                    }
+                    throw checkpointFailure;
+                }
+            }
+        }
 
         try {
+            long remaining = contentLength;
             int partNumber = 1;
-
             while (remaining > 0) {
                 long currentPartSize = Math.min(partSize, remaining);
-                Path partFile = Files.createTempFile(
-                        temporaryDirectory,
-                        "migration-part-",
-                        ".bin"
-                );
-
-                try {
-                    copyExactly(content, partFile, currentPartSize);
-
-                    UploadPartResponse uploaded = s3.uploadPart(
-                            UploadPartRequest.builder()
-                                    .bucket(bucket)
-                                    .key(key)
-                                    .uploadId(uploadId)
-                                    .partNumber(partNumber)
-                                    .contentLength(currentPartSize)
-                                    .build(),
-                            RequestBody.fromFile(partFile)
-                    );
-
-                    if (uploaded == null || uploaded.eTag() == null
-                            || uploaded.eTag().isBlank()) {
-                        throw new IllegalStateException(
-                                "S3 did not return an ETag for multipart part "
-                                        + partNumber
-                        );
+                if (remoteEtags.containsKey(partNumber)) {
+                    skipExactly(content, currentPartSize);
+                } else {
+                    Path partFile = Files.createTempFile(temporaryDirectory, "migration-part-", ".bin");
+                    try {
+                        copyExactly(content, partFile, currentPartSize);
+                        UploadPartResponse uploaded = s3.uploadPart(
+                                UploadPartRequest.builder().bucket(bucket).key(key)
+                                        .uploadId(uploadId).partNumber(partNumber)
+                                        .contentLength(currentPartSize).build(),
+                                RequestBody.fromFile(partFile));
+                        if (uploaded == null || uploaded.eTag() == null || uploaded.eTag().isBlank()) {
+                            throw new IllegalStateException(
+                                    "S3 did not return an ETag for multipart part " + partNumber);
+                        }
+                        remoteEtags.put(partNumber, uploaded.eTag());
+                        if (context != null) {
+                            List<MultipartUploadCheckpoint.CompletedPart> savedParts =
+                                    remoteEtags.entrySet().stream()
+                                            .map(e -> new MultipartUploadCheckpoint.CompletedPart(
+                                                    e.getKey(), e.getValue()))
+                                            .toList();
+                            requireCheckpointSave(context, new MultipartUploadCheckpoint(
+                                    uploadId, bucket, key, contentLength, partSize,
+                                    fingerprint, savedParts));
+                        }
+                    } finally {
+                        Files.deleteIfExists(partFile);
                     }
-
-                    completedParts.add(
-                            CompletedPart.builder()
-                                    .partNumber(partNumber)
-                                    .eTag(uploaded.eTag())
-                                    .build()
-                    );
-
-                } finally {
-                    Files.deleteIfExists(partFile);
                 }
-
                 remaining -= currentPartSize;
                 partNumber++;
             }
-
             if (content.read() != -1) {
-                throw new IOException(
-                        "Document stream contains more bytes than declared size "
-                                + contentLength
-                );
+                throw new IOException("Document stream contains more bytes than declared size "
+                        + contentLength);
             }
-
-            s3.completeMultipartUpload(
-                    CompleteMultipartUploadRequest.builder()
-                            .bucket(bucket)
-                            .key(key)
-                            .uploadId(uploadId)
-                            .multipartUpload(
-                                    CompletedMultipartUpload.builder()
-                                            .parts(completedParts)
-                                            .build()
-                            )
-                            .build()
-            );
-
+            List<CompletedPart> finalParts = remoteEtags.entrySet().stream()
+                    .map(e -> CompletedPart.builder().partNumber(e.getKey())
+                            .eTag(e.getValue()).build()).toList();
+            s3.completeMultipartUpload(CompleteMultipartUploadRequest.builder()
+                    .bucket(bucket).key(key).uploadId(uploadId)
+                    .multipartUpload(CompletedMultipartUpload.builder().parts(finalParts).build())
+                    .build());
+            if (context != null) requireCheckpointClear(context);
         } catch (Exception failure) {
-            try {
-                s3.abortMultipartUpload(
-                        AbortMultipartUploadRequest.builder()
-                                .bucket(bucket)
-                                .key(key)
-                                .uploadId(uploadId)
-                                .build()
-                );
-            } catch (Exception abortFailure) {
-                failure.addSuppressed(abortFailure);
+            if (context == null) {
+                try {
+                    s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                            .bucket(bucket).key(key).uploadId(uploadId).build());
+                } catch (Exception abortFailure) {
+                    failure.addSuppressed(abortFailure);
+                }
             }
-
             throw failure;
+        }
+    }
+
+    private void abortExistingUpload(String uploadBucket, String uploadKey, String uploadId) {
+        try {
+            s3.abortMultipartUpload(AbortMultipartUploadRequest.builder()
+                    .bucket(uploadBucket).key(uploadKey).uploadId(uploadId).build());
+        } catch (S3Exception failure) {
+            String code = failure.awsErrorDetails() == null
+                    ? null : failure.awsErrorDetails().errorCode();
+            if (!"NoSuchUpload".equals(code)) throw failure;
+        }
+    }
+
+    private List<CompletedPart> listRemoteParts(String key, String uploadId) {
+        List<CompletedPart> result = new ArrayList<>();
+        Integer marker = null;
+        boolean truncated;
+        do {
+            ListPartsRequest.Builder builder = ListPartsRequest.builder()
+                    .bucket(bucket).key(key).uploadId(uploadId);
+            if (marker != null) builder.partNumberMarker(marker);
+            ListPartsResponse response = s3.listParts(builder.build());
+            for (Part part : response.parts()) {
+                if (part.eTag() != null && !part.eTag().isBlank()) {
+                    result.add(CompletedPart.builder().partNumber(part.partNumber())
+                            .eTag(part.eTag()).build());
+                }
+            }
+            truncated = Boolean.TRUE.equals(response.isTruncated());
+            marker = response.nextPartNumberMarker();
+        } while (truncated);
+        return result;
+    }
+
+    private void requireCheckpointSave(
+            MultipartUploadContext context, MultipartUploadCheckpoint checkpoint) {
+        if (!context.save(checkpoint)) {
+            throw new IllegalStateException(
+                    "Multipart checkpoint save rejected because the worker no longer owns its document lease");
+        }
+    }
+
+    private static void requireCheckpointClear(MultipartUploadContext context) {
+        if (!context.clear()) {
+            throw new IllegalStateException(
+                    "Multipart checkpoint clear rejected because the worker no longer owns its document lease");
+        }
+    }
+
+    private static void skipExactly(InputStream input, long expectedBytes) throws IOException {
+        byte[] buffer = new byte[COPY_BUFFER_SIZE];
+        long remaining = expectedBytes;
+        while (remaining > 0) {
+            int count = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+            if (count < 0) throw new EOFException("Document stream ended before expected part bytes");
+            if (count == 0) {
+                if (input.read() < 0) throw new EOFException("Document stream ended before expected part bytes");
+                remaining--;
+            } else remaining -= count;
+        }
+    }
+
+    private static String metadataFingerprint(Map<String, String> metadata) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            new TreeMap<>(metadata).forEach((key, value) -> {
+                digest.update(key.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+                digest.update(value.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+            });
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
     }
 

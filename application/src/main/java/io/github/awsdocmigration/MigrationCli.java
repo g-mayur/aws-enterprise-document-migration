@@ -9,6 +9,7 @@ import io.github.awsdocmigration.domain.VersionPolicy;
 import io.github.awsdocmigration.engine.DestinationKeyResolver;
 import io.github.awsdocmigration.engine.DocumentMigrationCoordinator;
 import io.github.awsdocmigration.engine.DocumentStateStore;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 import io.github.awsdocmigration.engine.DynamoDbDocumentStateStore;
 import io.github.awsdocmigration.engine.DynamoDbJobStateStore;
 import io.github.awsdocmigration.engine.JobPreparationCoordinator;
@@ -1056,15 +1057,10 @@ public final class MigrationCli {
 
             ShardExecutionCoordinator.Result result;
             try {
-                result = execution.execute(
+                result = execution.executeWithContext(
                         manifestPath,
-                        record -> migrateDocument(
-                                source,
-                                writer,
-                                keyResolver,
-                                record,
-                                policy
-                        )
+                        (record, context) -> migrateDocument(
+                                source, writer, keyResolver, record, policy, context)
                 );
             } catch (Exception executionFailure) {
                 try {
@@ -1226,6 +1222,17 @@ public final class MigrationCli {
             DocumentRecord record,
             VersionPolicy policy
     ) throws Exception {
+        return migrateDocument(source, writer, keyResolver, record, policy, null);
+    }
+
+    static DocumentMigrationCoordinator.MigrationOutcome migrateDocument(
+            DocumentSource source,
+            DestinationWriter writer,
+            DestinationKeyResolver keyResolver,
+            DocumentRecord record,
+            VersionPolicy policy,
+            MultipartUploadContext context
+    ) throws Exception {
 
         Path temporaryFile = null;
 
@@ -1270,7 +1277,11 @@ public final class MigrationCli {
 
             try (InputStream uploadStream =
                          Files.newInputStream(temporaryFile)) {
-                writer.write(record, destinationKey, uploadStream, digest);
+                if (context == null) {
+                    writer.write(record, destinationKey, uploadStream, digest);
+                } else {
+                    writer.write(record, destinationKey, uploadStream, digest, context);
+                }
             }
 
             return new DocumentMigrationCoordinator.MigrationOutcome(

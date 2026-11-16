@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import io.github.awsdocmigration.domain.MigrationJobStatus;
 import io.github.awsdocmigration.domain.MigrationShardStatus;
 import io.github.awsdocmigration.domain.DocumentRecord;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -29,6 +30,13 @@ public final class ShardExecutionCoordinator {
     public interface MigrationOperation {
         DocumentMigrationCoordinator.MigrationOutcome migrate(
                 DocumentRecord record
+        ) throws Exception;
+    }
+
+    @FunctionalInterface
+    public interface ContextualMigrationOperation {
+        DocumentMigrationCoordinator.MigrationOutcome migrate(
+                DocumentRecord record, MultipartUploadContext context
         ) throws Exception;
     }
 
@@ -97,6 +105,15 @@ public final class ShardExecutionCoordinator {
     public Result execute(
             Path manifestPath,
             MigrationOperation migration
+    ) throws Exception {
+        Objects.requireNonNull(migration, "Migration operation is required");
+        return executeWithContext(manifestPath,
+                (record, context) -> migration.migrate(record));
+    }
+
+    public Result executeWithContext(
+            Path manifestPath,
+            ContextualMigrationOperation migration
     ) throws Exception {
         Objects.requireNonNull(manifestPath, "Manifest path is required");
         Objects.requireNonNull(migration, "Migration operation is required");
@@ -200,9 +217,9 @@ public final class ShardExecutionCoordinator {
                     }
 
                     DocumentMigrationCoordinator.Result documentResult =
-                            documentCoordinator.execute(
+                            documentCoordinator.executeWithContext(
                                     record,
-                                    () -> migration.migrate(record)
+                                    context -> migration.migrate(record, context)
                             );
 
                     switch (documentResult) {

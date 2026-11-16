@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import io.github.awsdocmigration.domain.DocumentMigrationStatus;
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.domain.VersionIdentityType;
+import io.github.awsdocmigration.storage.MultipartUploadContext;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -41,6 +42,11 @@ public final class DocumentMigrationCoordinator {
                 );
             }
         }
+    }
+
+    @FunctionalInterface
+    public interface ContextualMigrationOperation {
+        MigrationOutcome migrate(MultipartUploadContext context) throws Exception;
     }
 
     private final DocumentStateStore stateStore;
@@ -94,6 +100,14 @@ public final class DocumentMigrationCoordinator {
     public Result execute(
             DocumentRecord record,
             Callable<MigrationOutcome> migration
+    ) throws Exception {
+        Objects.requireNonNull(migration, "Migration operation is required");
+        return executeWithContext(record, context -> migration.call());
+    }
+
+    public Result executeWithContext(
+            DocumentRecord record,
+            ContextualMigrationOperation migration
     ) throws Exception {
         Objects.requireNonNull(record, "Document record is required");
         Objects.requireNonNull(migration, "Migration operation is required");
@@ -173,7 +187,10 @@ public final class DocumentMigrationCoordinator {
         }, renewalIntervalMillis, renewalIntervalMillis, TimeUnit.MILLISECONDS);
 
         try {
-            MigrationOutcome outcome = migration.call();
+            MultipartUploadContext context = new MultipartUploadContext(
+                    stateStore, jobId, shardNumber, workerId,
+                    record.documentId(), record.versionId(), identityType);
+            MigrationOutcome outcome = migration.migrate(context);
 
             if (leaseLost.get()) {
                 throw new IllegalStateException(
