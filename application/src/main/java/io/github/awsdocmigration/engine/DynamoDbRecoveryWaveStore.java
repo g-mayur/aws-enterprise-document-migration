@@ -87,6 +87,7 @@ public final class DynamoDbRecoveryWaveStore {
         values.put(":timedOut", s("TIMED_OUT"));
         values.put(":aborted", s("ABORTED"));
         values.put(":nonexistent", s("NONEXISTENT"));
+        values.put(":reconciled", s("RECONCILED"));
 
         try {
             UpdateItemResponse response = dynamoDb.updateItem(UpdateItemRequest.builder()
@@ -99,13 +100,15 @@ public final class DynamoDbRecoveryWaveStore {
                                     + "#selectedShardDigest = :selectedShardDigest, "
                                     + "#executionName = :executionName, #state = :active, "
                                     + "#executionStatus = :unknown, #createdAt = :now, #updatedAt = :now "
-                                    + "REMOVE #executionArn, #stateMachineArn, #executionInputDigest"
+                                    + "REMOVE #executionArn, #stateMachineArn, #executionInputDigest, "
+                                    + "#reconciliationStatus, #reconciledAt"
                     )
                     .conditionExpression(
                             "attribute_not_exists(pk) OR "
                                     + "(#state = :terminal AND (#executionStatus = :succeeded "
                                     + "OR #executionStatus = :failed OR #executionStatus = :timedOut "
-                                    + "OR #executionStatus = :aborted OR #executionStatus = :nonexistent))"
+                                    + "OR #executionStatus = :aborted OR #executionStatus = :nonexistent) "
+                                    + "AND #reconciliationStatus = :reconciled)"
                     )
                     .expressionAttributeNames(Map.ofEntries(
                             Map.entry("#generation", "generation"),
@@ -120,7 +123,9 @@ public final class DynamoDbRecoveryWaveStore {
                             Map.entry("#updatedAt", "updatedAt"),
                             Map.entry("#executionArn", "executionArn"),
                             Map.entry("#stateMachineArn", "stateMachineArn"),
-                            Map.entry("#executionInputDigest", "executionInputDigest")
+                            Map.entry("#executionInputDigest", "executionInputDigest",
+                            "#reconciliationStatus", "reconciliationStatus",
+                            "#reconciledAt", "reconciledAt")
                     ))
                     .expressionAttributeValues(values)
                     .returnValues("ALL_NEW")
@@ -295,6 +300,50 @@ public final class DynamoDbRecoveryWaveStore {
                     .build());
             return true;
         } catch (ConditionalCheckFailedException staleOwner) {
+            return false;
+        }
+    }
+
+    /**
+     * Marks a terminal wave reconciled only after the caller has re-read the
+     * complete durable shard state and attempted the guarded job finalizer.
+     * This is the gate that permits a subsequent recovery generation.
+     */
+    public boolean markReconciled(RecoveryWaveSnapshot snapshot, Instant now) {
+        Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");
+        Objects.requireNonNull(now, "Reconciliation time is required");
+        if (!"TERMINAL".equals(snapshot.state())
+                || !TERMINAL_EXECUTION_STATUSES.contains(snapshot.executionStatus())) {
+            throw new IllegalArgumentException("Only a terminal recovery wave can be reconciled");
+        }
+        try {
+            dynamoDb.updateItem(UpdateItemRequest.builder()
+                    .tableName(tableName)
+                    .key(key(snapshot.jobId()))
+                    .updateExpression("SET #reconciliationStatus = :reconciled, #reconciledAt = :now")
+                    .conditionExpression(
+                            "#state = :terminal AND #generation = :generation "
+                                    + "AND #waveId = :waveId AND #executionStatus = :executionStatus"
+                    )
+                    .expressionAttributeNames(Map.of(
+                            "#state", "state",
+                            "#generation", "generation",
+                            "#waveId", "waveId",
+                            "#executionStatus", "executionStatus",
+                            "#reconciliationStatus", "reconciliationStatus",
+                            "#reconciledAt", "reconciledAt"
+                    ))
+                    .expressionAttributeValues(Map.of(
+                            ":terminal", s("TERMINAL"),
+                            ":generation", n(snapshot.generation()),
+                            ":waveId", s(snapshot.waveId()),
+                            ":executionStatus", s(snapshot.executionStatus()),
+                            ":reconciled", s("RECONCILED"),
+                            ":now", n(now.toEpochMilli())
+                    ))
+                    .build());
+            return true;
+        } catch (ConditionalCheckFailedException staleWave) {
             return false;
         }
     }
