@@ -3,6 +3,7 @@ package io.github.awsdocmigration.engine;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
 
@@ -136,6 +137,41 @@ public final class DynamoDbRecoveryWaveStore {
         } catch (ConditionalCheckFailedException activeWaveExists) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Returns the latest wave using a strongly consistent read. This method
+     * never changes the lock or execution status.
+     */
+    public Optional<RecoveryWaveSnapshot> get(String jobId) {
+        requireText(jobId, "jobId");
+        Map<String, AttributeValue> item = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId))
+                .consistentRead(true)
+                .build()).item();
+        if (item == null || item.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Integer> selected = item.get("selectedShardNumbers") == null
+                || item.get("selectedShardNumbers").l() == null
+                ? List.of()
+                : item.get("selectedShardNumbers").l().stream()
+                        .map(value -> Integer.parseInt(value.n()))
+                        .toList();
+        long createdAt = number(item, "createdAt");
+        return Optional.of(new RecoveryWaveSnapshot(
+                jobId,
+                text(item, "waveId"),
+                number(item, "generation"),
+                text(item, "state"),
+                text(item, "executionStatus"),
+                nullableText(item, "executionArn"),
+                nullableText(item, "stateMachineArn"),
+                nullableText(item, "selectedShardDigest"),
+                selected,
+                Instant.ofEpochMilli(createdAt)
+        ));
     }
 
     /**
@@ -324,6 +360,16 @@ public final class DynamoDbRecoveryWaveStore {
 
     private static AttributeValue n(long value) {
         return AttributeValue.builder().n(Long.toString(value)).build();
+    }
+
+    private static String text(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        return value == null ? null : value.s();
+    }
+
+    private static String nullableText(Map<String, AttributeValue> item, String name) {
+        AttributeValue value = item.get(name);
+        return value == null ? null : value.s();
     }
 
     private static long number(Map<String, AttributeValue> item, String name) {
