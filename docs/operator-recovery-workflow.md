@@ -123,3 +123,11 @@ java -jar target/document-migration-worker.jar \\
 ```
 
 The command reads the execution ARN and state-machine ARN from the durable recovery-wave record, verifies the exact terminal execution with Step Functions, and re-reads every registered shard. It invokes the existing job finalizer only when all shards are terminal. The recovery-wave slot is not available for another generation until this reconciliation is recorded. See [recovery-wave-reconciliation.md](recovery-wave-reconciliation.md) for the report fields, safety gates, and failure handling. The final wave unlock and an immutable per-generation audit item are committed in one DynamoDB transaction. The audit item records the execution status, shard disposition counts, reconciliation time, and job finalization result. If the process stops before that transaction commits, the wave remains unreconciled and the command can be safely retried. Concurrent attempts are fenced so only one can commit the audit and unlock.
+
+## Automatic recovery is not enabled
+
+The current commands remain operator-driven: plan-recovery, dispatch-recovery, and reconcile-recovery. Do not schedule or loop these commands unattended.
+
+The next automation milestone must first persist and verify an immutable recovery configuration for the prepared job. It must then implement the finite control loop and stop conditions in shard-recovery-design.md. In particular, unattended execution must not repeatedly dispatch while leases are active or unknown, and it must stop on ambiguous Step Functions outcomes while retaining the durable wave lock.
+
+Until those gates are implemented and validated in a non-production AWS account, continue to review each plan and explicitly authorize each recovery wave.
