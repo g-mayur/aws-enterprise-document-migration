@@ -1277,7 +1277,11 @@ public final class MigrationCli {
 
             try (InputStream uploadStream =
                          Files.newInputStream(temporaryFile)) {
-                writer.write(record, destinationKey, uploadStream, digest, context);
+                if (context == null) {
+                    writer.write(record, destinationKey, uploadStream, digest);
+                } else {
+                    writer.write(record, destinationKey, uploadStream, digest, context);
+                }
             }
 
             return new DocumentMigrationCoordinator.MigrationOutcome(
