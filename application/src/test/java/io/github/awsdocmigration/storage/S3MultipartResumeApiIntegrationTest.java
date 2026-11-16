@@ -77,7 +77,7 @@ class S3MultipartResumeApiIntegrationTest {
 
                 var firstPart = s3.uploadPart(UploadPartRequest.builder()
                                 .bucket(bucket).key(key).uploadId(uploadId)
-                                .partNumber(1).contentLength(PART_SIZE).build(),
+                                .partNumber(1).contentLength((long) PART_SIZE).build(),
                         RequestBody.fromBytes(java.util.Arrays.copyOfRange(
                                 content, 0, PART_SIZE)));
 
