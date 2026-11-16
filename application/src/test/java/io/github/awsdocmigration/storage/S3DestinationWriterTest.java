@@ -294,7 +294,7 @@ class S3DestinationWriterTest {
         when(s3.listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class)))
                 .thenReturn(software.amazon.awssdk.services.s3.model.ListPartsResponse.builder()
                         .parts(software.amazon.awssdk.services.s3.model.Part.builder()
-                                .partNumber(1).size(PART_SIZE).eTag("remote-etag-1").build())
+                                .partNumber(1).size((long) PART_SIZE).eTag("remote-etag-1").build())
                         .isTruncated(false).build());
         when(s3.uploadPart(any(UploadPartRequest.class), any(RequestBody.class)))
                 .thenReturn(UploadPartResponse.builder().eTag("remote-etag-2").build());
