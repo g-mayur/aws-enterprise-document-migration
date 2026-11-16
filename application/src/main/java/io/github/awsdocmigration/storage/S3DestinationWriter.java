@@ -2,7 +2,6 @@ package io.github.awsdocmigration.storage;
 
 import io.github.awsdocmigration.domain.DocumentRecord;
 import io.github.awsdocmigration.engine.MultipartUploadCheckpoint;
-import io.github.awsdocmigration.engine.MultipartUploadContext;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
