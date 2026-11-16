@@ -127,9 +127,14 @@ class S3SuspendedSourceApiIntegrationTest {
                     .bucket(bucket)
                     .prefix("documents/")
                     .build());
-            assertTrue(versionListing.deleteMarkers().stream()
-                    .anyMatch(marker -> deletedKey.equals(marker.key())),
-                    "Fixture must include a real S3 delete marker");
+            DeleteMarkerEntry deleteMarker = versionListing.deleteMarkers().stream()
+                    .filter(marker -> deletedKey.equals(marker.key()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("Fixture must include a real S3 delete marker"));
+            assertTrue(discovered.values().stream()
+                            .noneMatch(record -> deletedKey.equals(record.documentId())
+                                    && deleteMarker.versionId().equals(record.versionId())),
+                    "Delete marker version IDs must not be exposed as document records");
         } finally {
             if (bucketCreated) {
                 try (S3Client cleanup = S3ClientFactory.create(Region.US_EAST_1, endpoint)) {
