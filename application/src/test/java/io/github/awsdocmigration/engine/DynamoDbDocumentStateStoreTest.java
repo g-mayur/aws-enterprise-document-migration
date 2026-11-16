@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -75,6 +76,80 @@ class DynamoDbDocumentStateStoreTest {
                 now.plus(Duration.ofMinutes(5)).toEpochMilli(),
                 Long.parseLong(request.expressionAttributeValues().get(":leaseExpiry").n())
         );
+    }
+
+    @Test
+    void savesMultipartCheckpointOnlyUnderTheCurrentLease() {
+        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                .thenReturn(UpdateItemResponse.builder().build());
+        var checkpoint = new MultipartUploadCheckpoint(
+                "upload-123", "destination-bucket", "documents/file.bin",
+                10_000_000L, 5L * 1024L * 1024L, "a".repeat(64),
+                java.util.List.of(
+                        new MultipartUploadCheckpoint.CompletedPart(1, "etag-1")));
+
+        assertTrue(store.saveMultipartUpload(
+                "job-1", 0, "document-1", "version-1",
+                VersionIdentityType.SOURCE_VERSION, "worker-a", checkpoint, now));
+
+        ArgumentCaptor<UpdateItemRequest> captor =
+                ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDb).updateItem(captor.capture());
+        UpdateItemRequest request = captor.getValue();
+        assertTrue(request.conditionExpression().contains("#leaseOwner = :worker"));
+        assertTrue(request.conditionExpression().contains("#leaseExpiresAt > :now"));
+        assertEquals("upload-123",
+                request.expressionAttributeValues().get(":checkpoint").m().get("uploadId").s());
+        assertEquals("etag-1",
+                request.expressionAttributeValues().get(":checkpoint").m()
+                        .get("completedParts").l().get(0).m().get("eTag").s());
+    }
+
+    @Test
+    void refusesToSaveMultipartCheckpointAfterLeaseIsLost() {
+        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                .thenThrow(ConditionalCheckFailedException.builder()
+                        .message("Lease not owned").build());
+        var checkpoint = new MultipartUploadCheckpoint(
+                "upload-123", "destination-bucket", "documents/file.bin",
+                10_000_000L, 5L * 1024L * 1024L, "a".repeat(64),
+                java.util.List.of());
+
+        assertFalse(store.saveMultipartUpload(
+                "job-1", 0, "document-1", "version-1",
+                VersionIdentityType.SOURCE_VERSION, "stale-worker", checkpoint, now));
+    }
+
+    @Test
+    void loadsMultipartCheckpointFromDurableDocumentItem() {
+        Map<String, AttributeValue> upload = new HashMap<>();
+        upload.put("uploadId", AttributeValue.builder().s("upload-123").build());
+        upload.put("bucket", AttributeValue.builder().s("destination-bucket").build());
+        upload.put("key", AttributeValue.builder().s("documents/file.bin").build());
+        upload.put("contentLength", AttributeValue.builder().n("10000000").build());
+        upload.put("partSize", AttributeValue.builder().n("5242880").build());
+        upload.put("metadataFingerprint", AttributeValue.builder().s("a".repeat(64)).build());
+        upload.put("completedParts", AttributeValue.builder().l(
+                AttributeValue.builder().m(Map.of(
+                        "partNumber", AttributeValue.builder().n("1").build(),
+                        "eTag", AttributeValue.builder().s("etag-1").build())).build()
+        ).build());
+        when(dynamoDb.getItem(any(GetItemRequest.class))).thenReturn(
+                GetItemResponse.builder().item(Map.of(
+                        "multipartUpload", AttributeValue.builder().m(upload).build()
+                )).build());
+
+        var checkpoint = store.getMultipartUpload(
+                "job-1", 0, "document-1", "version-1",
+                VersionIdentityType.SOURCE_VERSION).orElseThrow();
+
+        assertEquals("upload-123", checkpoint.uploadId());
+        assertEquals("destination-bucket", checkpoint.bucket());
+        assertEquals("documents/file.bin", checkpoint.key());
+        assertEquals(10_000_000L, checkpoint.contentLength());
+        assertEquals(5L * 1024L * 1024L, checkpoint.partSize());
+        assertEquals(List.of(new MultipartUploadCheckpoint.CompletedPart(1, "etag-1")),
+                checkpoint.completedParts());
     }
 
     @Test
