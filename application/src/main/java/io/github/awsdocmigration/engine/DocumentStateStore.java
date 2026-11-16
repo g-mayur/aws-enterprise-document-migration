@@ -106,4 +106,40 @@ public interface DocumentStateStore {
             String jobId, int shardNumber, String documentId, String versionId,
             VersionIdentityType versionIdentityType
     );
+
+    /**
+     * Returns the durable multipart checkpoint for a document version.
+     * The checkpoint is retained when an expired document lease is reclaimed.
+     */
+    default Optional<MultipartUploadCheckpoint> getMultipartUpload(
+            String jobId, int shardNumber, String documentId, String versionId,
+            VersionIdentityType versionIdentityType
+    ) {
+        return Optional.empty();
+    }
+
+    /**
+     * Persists a multipart checkpoint only while the caller owns an unexpired
+     * document lease. Implementations must atomically replace the checkpoint.
+     */
+    default boolean saveMultipartUpload(
+            String jobId, int shardNumber, String documentId, String versionId,
+            VersionIdentityType versionIdentityType, String workerId,
+            MultipartUploadCheckpoint checkpoint, Instant now
+    ) {
+        throw new UnsupportedOperationException(
+                "Multipart upload checkpoints are not supported by this store");
+    }
+
+    /**
+     * Removes a multipart checkpoint only while the caller owns an unexpired
+     * document lease.
+     */
+    default boolean clearMultipartUpload(
+            String jobId, int shardNumber, String documentId, String versionId,
+            VersionIdentityType versionIdentityType, String workerId, Instant now
+    ) {
+        throw new UnsupportedOperationException(
+                "Multipart upload checkpoints are not supported by this store");
+    }
 }
