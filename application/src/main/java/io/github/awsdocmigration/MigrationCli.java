@@ -527,59 +527,54 @@ public final class MigrationCli {
             String region
     ) throws Exception {
         validateRecoveryConfirmation(arguments);
-        RecoveryWavePlanner.Plan plan = loadRecoveryPlan(dynamoDb, s3, arguments);
+        String jobId = required(arguments, "job-id");
+        String jobStateTable = required(arguments, "job-state-table");
+        JobStateStore jobStateStore = new DynamoDbJobStateStore(dynamoDb, jobStateTable);
+        RecoveryJobConfiguration configuration = jobStateStore.getRecoveryConfiguration(jobId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "No immutable recovery configuration is bound to job " + jobId
+                                + ". Run --mode configure-recovery before dispatch."));
+        validateRecoveryConfiguration(configuration, jobStateTable, region);
+
+        RecoveryWavePlanner.Plan plan = loadRecoveryPlan(
+                jobStateStore, s3, jobId, configuration);
         printRecoveryPlan(plan);
         if (plan.selectedShardNumbers().isEmpty()) {
             throw new IllegalStateException("No shards are currently eligible for recovery; nothing was dispatched.");
         }
 
-        String stateMachineArn = required(arguments, "state-machine-arn");
         var stateMachine = stepFunctions.describeStateMachine(
-                DescribeStateMachineRequest.builder().stateMachineArn(stateMachineArn).build());
+                DescribeStateMachineRequest.builder()
+                        .stateMachineArn(configuration.stateMachineArn()).build());
         if (stateMachine.type() != StateMachineType.STANDARD) {
             throw new IllegalStateException(
                     "Recovery dispatch requires a Standard Step Functions state machine.");
         }
         RecoveryWaveExecutionGuard.requireNoRunningExecutionForJob(
-                stepFunctions, stateMachineArn, plan.job().jobId());
-
-        String sourceBucket = required(arguments, "source-bucket");
-        String sourcePrefix = requiredPresent(arguments, "source-prefix");
-        String destinationBucket = required(arguments, "destination-bucket");
-        String manifestS3Uri = required(arguments, "manifest-s3-uri");
-        String documentStateTable = required(arguments, "state-table");
-        String jobStateTable = required(arguments, "job-state-table");
-        VersionPolicy versionPolicy = VersionPolicy.valueOf(required(arguments, "version-policy"));
-        int leaseSeconds = parsePositiveInt(
-                required(arguments, "lease-seconds"), "lease-seconds");
-        if (leaseSeconds < 3) {
-            throw new IllegalArgumentException("--lease-seconds must be at least 3");
-        }
-        int maximumDocumentAttempts = parsePositiveInt(
-                required(arguments, "max-attempts"), "max-attempts");
+                stepFunctions, configuration.stateMachineArn(), plan.job().jobId());
 
         String waveId = UUID.randomUUID().toString();
         String ownerToken = UUID.randomUUID().toString();
         Instant now = Instant.now();
         String exactInput = RecoveryWaveInputBuilder.build(
                 plan.job().jobId(),
-                sourceBucket,
-                sourcePrefix,
-                destinationBucket,
-                manifestS3Uri,
+                configuration.sourceBucket(),
+                configuration.sourcePrefix(),
+                configuration.destinationBucket(),
+                configuration.manifestS3Uri(),
                 plan.job().totalShards(),
                 plan.selectedShardNumbers(),
-                documentStateTable,
-                jobStateTable,
-                versionPolicy,
-                region,
-                leaseSeconds,
-                maximumDocumentAttempts,
+                configuration.documentStateTable(),
+                configuration.jobStateTable(),
+                configuration.versionPolicy(),
+                configuration.region(),
+                configuration.leaseSeconds(),
+                configuration.maximumDocumentAttempts(),
                 waveId
         );
 
         DynamoDbRecoveryWaveStore waveStore =
-                new DynamoDbRecoveryWaveStore(dynamoDb, jobStateTable);
+                new DynamoDbRecoveryWaveStore(dynamoDb, configuration.jobStateTable());
         var lease = waveStore.acquire(
                 plan.job().jobId(),
                 waveId,
@@ -592,7 +587,7 @@ public final class MigrationCli {
 
         StepFunctionsRecoveryWaveDispatcher.Result result =
                 new StepFunctionsRecoveryWaveDispatcher(stepFunctions, waveStore)
-                        .dispatch(lease, stateMachineArn, exactInput, Instant.now());
+                        .dispatch(lease, configuration.stateMachineArn(), exactInput, Instant.now());
 
         System.out.printf(
                 "Recovery dispatch result. job=%s wave=%s generation=%d outcome=%s "
@@ -647,6 +642,49 @@ public final class MigrationCli {
                 "A durable reconciliation audit record was committed atomically with the "
                         + "recovery-wave unlock. It includes the shard disposition counts "
                         + "and finalization result.");
+    }
+
+    private static RecoveryWavePlanner.Plan loadRecoveryPlan(
+            JobStateStore jobStateStore,
+            S3Client s3,
+            String jobId,
+            RecoveryJobConfiguration configuration
+    ) throws Exception {
+        Path manifestPath = resolveManifestPath(
+                s3, Map.of("manifest-s3-uri", configuration.manifestS3Uri()));
+        try {
+            RecoveryWavePlanner.Plan plan = new RecoveryWavePlanner(jobStateStore).plan(
+                    jobId,
+                    manifestPath,
+                    configuration.sourceBucket(),
+                    configuration.sourcePrefix(),
+                    Instant.now());
+            if (!configuration.manifestFingerprint().equalsIgnoreCase(plan.manifestFingerprint())) {
+                throw new IllegalStateException(
+                        "Persisted recovery configuration fingerprint does not match the prepared manifest");
+            }
+            return plan;
+        } finally {
+            Files.deleteIfExists(manifestPath);
+        }
+    }
+
+    static void validateRecoveryConfiguration(
+            RecoveryJobConfiguration configuration,
+            String jobStateTable,
+            String region
+    ) {
+        if (configuration == null) {
+            throw new IllegalArgumentException("Immutable recovery configuration is required");
+        }
+        if (!jobStateTable.equals(configuration.jobStateTable())) {
+            throw new IllegalArgumentException(
+                    "The supplied --job-state-table does not match the immutable recovery configuration");
+        }
+        if (!region.equals(configuration.region())) {
+            throw new IllegalArgumentException(
+                    "The runtime AWS Region does not match the immutable recovery configuration Region");
+        }
     }
 
     private static RecoveryWavePlanner.Plan loadRecoveryPlan(
