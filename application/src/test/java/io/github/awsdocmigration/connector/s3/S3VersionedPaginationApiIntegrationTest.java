@@ -91,6 +91,7 @@ class S3VersionedPaginationApiIntegrationTest {
             source.validateConnection();
 
             Map<String, DocumentRecord> boundaryRecords = new HashMap<>();
+            Map<String, DocumentRecord> allBoundaryRecords = new HashMap<>();
             Map<String, Integer> recordsPerKey = new HashMap<>();
             Map<String, Integer> latestPerKey = new HashMap<>();
             int discoveredCount = 0;
@@ -105,7 +106,10 @@ class S3VersionedPaginationApiIntegrationTest {
                     latestPerKey.merge(record.documentId(), 1, Integer::sum);
                 }
                 if (boundaryKey.equals(record.documentId())) {
-                    boundaryRecords.put(record.versionId(), record);
+                    allBoundaryRecords.put(record.versionId(), record);
+                    if (expectedContentByVersion.containsKey(record.versionId())) {
+                        boundaryRecords.put(record.versionId(), record);
+                    }
                 }
                 discoveredCount++;
             }
@@ -116,7 +120,10 @@ class S3VersionedPaginationApiIntegrationTest {
                     "The lexicographically last key must have all four versions across the page boundary");
             assertEquals(1, latestPerKey.get(boundaryKey),
                     "Exactly one version of the boundary key must be marked latest");
-            assertEquals(expectedContentByVersion.keySet(), boundaryRecords.keySet());
+            assertEquals(4, allBoundaryRecords.size(),
+                    "All four versions of the boundary key must be retained");
+            assertEquals(expectedContentByVersion.keySet(), boundaryRecords.keySet(),
+                    "Both explicitly labelled boundary versions must be available for exact-version reads");
 
             for (Map.Entry<String, String> expected : expectedContentByVersion.entrySet()) {
                 try (InputStream input = source.openStream(boundaryRecords.get(expected.getKey()))) {
