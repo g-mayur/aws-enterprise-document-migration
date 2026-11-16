@@ -43,6 +43,11 @@ public final class DocumentMigrationCoordinator {
         }
     }
 
+    @FunctionalInterface
+    public interface ContextualMigrationOperation {
+        MigrationOutcome migrate(MultipartUploadContext context) throws Exception;
+    }
+
     private final DocumentStateStore stateStore;
     private final String jobId;
     private final int shardNumber;
@@ -94,6 +99,14 @@ public final class DocumentMigrationCoordinator {
     public Result execute(
             DocumentRecord record,
             Callable<MigrationOutcome> migration
+    ) throws Exception {
+        Objects.requireNonNull(migration, "Migration operation is required");
+        return executeWithContext(record, context -> migration.call());
+    }
+
+    public Result executeWithContext(
+            DocumentRecord record,
+            ContextualMigrationOperation migration
     ) throws Exception {
         Objects.requireNonNull(record, "Document record is required");
         Objects.requireNonNull(migration, "Migration operation is required");
@@ -173,7 +186,10 @@ public final class DocumentMigrationCoordinator {
         }, renewalIntervalMillis, renewalIntervalMillis, TimeUnit.MILLISECONDS);
 
         try {
-            MigrationOutcome outcome = migration.call();
+            MultipartUploadContext context = new MultipartUploadContext(
+                    stateStore, jobId, shardNumber, workerId,
+                    record.documentId(), record.versionId(), identityType);
+            MigrationOutcome outcome = migration.migrate(context);
 
             if (leaseLost.get()) {
                 throw new IllegalStateException(
