@@ -48,4 +48,6 @@ java -jar target/document-migration-worker.jar \
 
 Run additional workers with `--shard-number` values from `1` through `15` and unique worker IDs. All workers must use the exact same manifest file bytes and the same `--total-shards` value. Workers verify the prepared fingerprint and registered shard plan before claiming their assigned shard; they do not attempt to prepare the job themselves.
 
-A worker executes one shard and records that shard as COMPLETED or FAILED. This CLI mode does not yet dispatch workers, automatically retry failed shards, or mark the overall job COMPLETED after every shard finishes; those require a separate orchestration/finalization step.
+A worker executes one shard and records that shard as COMPLETED or FAILED. The per-shard worker command does not dispatch other workers or automatically retry failed shards. Use the separate operator recovery workflow below to plan and explicitly dispatch an eligible recovery wave. Post-execution reconciliation remains a separate step.
+
+The operator recovery workflow is documented in [Operator recovery workflow](operator-recovery-workflow.md). It provides a read-only recovery plan and an explicitly confirmed, single-wave Step Functions dispatch; it does not replace post-execution reconciliation.
