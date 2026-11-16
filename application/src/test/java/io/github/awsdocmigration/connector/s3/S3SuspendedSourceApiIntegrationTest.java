@@ -76,11 +76,22 @@ class S3SuspendedSourceApiIntegrationTest {
                             .build())
                     .build());
 
-            String nullVersionId = s3.putObject(
+            s3.putObject(
                     PutObjectRequest.builder().bucket(bucket).key(key).build(),
-                    RequestBody.fromBytes(currentContent)).versionId();
-            assertEquals("null", nullVersionId,
-                    "A write after suspension should create or replace the null version");
+                    RequestBody.fromBytes(currentContent));
+
+            var suspendedListing = s3.listObjectVersions(ListObjectVersionsRequest.builder()
+                    .bucket(bucket)
+                    .prefix(key)
+                    .build());
+            ObjectVersion nullVersion = suspendedListing.versions().stream()
+                    .filter(version -> key.equals(version.key()))
+                    .filter(version -> "null".equals(version.versionId()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "Expected S3 version listing to expose the suspended null version"));
+            assertTrue(nullVersion.isLatest(),
+                    "The suspended null version should be the latest object version");
 
             S3Source source = new S3Source(s3, bucket, "documents/");
             source.validateConnection();
