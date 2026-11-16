@@ -316,11 +316,6 @@ public final class DynamoDbRecoveryWaveStore {
     }
 
     /**
-     * Marks a terminal wave reconciled only after the caller has re-read the
-     * complete durable shard state and attempted the guarded job finalizer.
-     * This is the gate that permits a subsequent recovery generation.
-     */
-    /**
      * Atomically records the immutable reconciliation audit item and releases
      * the current wave slot. A conditional failure means the wave identity
      * became stale or the audit record was already written.
@@ -407,6 +402,10 @@ public final class DynamoDbRecoveryWaveStore {
         }
     }
 
+    /**
+     * Legacy reconciliation marker retained for compatibility with existing
+     * callers. New reconciliation flows should use the audit-bearing overload.
+     */
     public boolean markReconciled(RecoveryWaveSnapshot snapshot, Instant now) {
         Objects.requireNonNull(snapshot, "Recovery wave snapshot is required");
         Objects.requireNonNull(now, "Reconciliation time is required");
