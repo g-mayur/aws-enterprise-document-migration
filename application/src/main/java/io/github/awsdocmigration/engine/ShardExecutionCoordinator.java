@@ -32,6 +32,13 @@ public final class ShardExecutionCoordinator {
         ) throws Exception;
     }
 
+    @FunctionalInterface
+    public interface ContextualMigrationOperation {
+        DocumentMigrationCoordinator.MigrationOutcome migrate(
+                DocumentRecord record, MultipartUploadContext context
+        ) throws Exception;
+    }
+
     public record Result(
             int shardNumber,
             long assigned,
@@ -97,6 +104,15 @@ public final class ShardExecutionCoordinator {
     public Result execute(
             Path manifestPath,
             MigrationOperation migration
+    ) throws Exception {
+        Objects.requireNonNull(migration, "Migration operation is required");
+        return executeWithContext(manifestPath,
+                (record, context) -> migration.migrate(record));
+    }
+
+    public Result executeWithContext(
+            Path manifestPath,
+            ContextualMigrationOperation migration
     ) throws Exception {
         Objects.requireNonNull(manifestPath, "Manifest path is required");
         Objects.requireNonNull(migration, "Migration operation is required");
@@ -200,9 +216,9 @@ public final class ShardExecutionCoordinator {
                     }
 
                     DocumentMigrationCoordinator.Result documentResult =
-                            documentCoordinator.execute(
+                            documentCoordinator.executeWithContext(
                                     record,
-                                    () -> migration.migrate(record)
+                                    context -> migration.migrate(record, context)
                             );
 
                     switch (documentResult) {
