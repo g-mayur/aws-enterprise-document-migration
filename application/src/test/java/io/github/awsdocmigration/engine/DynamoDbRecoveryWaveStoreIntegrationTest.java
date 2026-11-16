@@ -81,11 +81,13 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
 
     @Test
     void auditRecordAndWaveUnlockAreCommittedAtomically() {
-        RecoveryWaveSnapshot snapshot = new RecoveryWaveSnapshot(
-                "audit-job", "audit-wave", 1, "TERMINAL", "SUCCEEDED",
-                "arn:execution:audit", "arn:stateMachine:audit", "a".repeat(64),
-                List.of(0), NOW
-        );
+        RecoveryWaveLease lease = store.acquire(
+                "audit-job", "audit-wave", "owner", List.of(0), "execution", NOW
+        ).orElseThrow();
+        assertTrue(store.recordExecutionStatus(
+                lease, "arn:execution:audit", "SUCCEEDED", NOW.plusSeconds(1)
+        ));
+        RecoveryWaveSnapshot snapshot = store.get("audit-job").orElseThrow();
         RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
                 "audit-job", "audit-wave", 1, NOW.plusSeconds(5), "SUCCEEDED",
                 1, 1, 0, 0, 0, 0, "COMPLETED"
@@ -119,11 +121,13 @@ class DynamoDbRecoveryWaveStoreIntegrationTest {
 
     @Test
     void concurrentReconciliationCommitsAllowOnlyOneAuditRecord() throws Exception {
-        RecoveryWaveSnapshot snapshot = new RecoveryWaveSnapshot(
-                "concurrent-audit-job", "wave-1", 1, "TERMINAL", "FAILED",
-                "arn:execution:concurrent", "arn:stateMachine:concurrent", "b".repeat(64),
-                List.of(0), NOW
-        );
+        RecoveryWaveLease lease = store.acquire(
+                "concurrent-audit-job", "wave-1", "owner", List.of(0), "execution", NOW
+        ).orElseThrow();
+        assertTrue(store.recordExecutionStatus(
+                lease, "arn:execution:concurrent", "FAILED", NOW.plusSeconds(1)
+        ));
+        RecoveryWaveSnapshot snapshot = store.get("concurrent-audit-job").orElseThrow();
         RecoveryReconciliationAudit audit = new RecoveryReconciliationAudit(
                 "concurrent-audit-job", "wave-1", 1, NOW.plusSeconds(7), "FAILED",
                 1, 0, 1, 0, 0, 0, "WAITING_FOR_SHARDS"
