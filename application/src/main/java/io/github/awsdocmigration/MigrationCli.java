@@ -613,11 +613,6 @@ public final class MigrationCli {
     }
 
     /**
-     * Re-reads the latest recovery execution and durable shard records.
-     * Finalization is attempted only after Step Functions and the durable
-     * recovery-wave record agree on the same terminal execution status.
-     */
-    /**
      * Runs a finite, explicitly confirmed recovery controller. Every wave is
      * dispatched through the existing guarded path, observed by exact ARN,
      * reconciled with its immutable audit, and followed by a fresh plan.
@@ -763,6 +758,11 @@ public final class MigrationCli {
         }
     }
 
+    /**
+     * Re-reads the latest recovery execution and durable shard records.
+     * Finalization is attempted only after Step Functions and the durable
+     * recovery-wave record agree on the same terminal execution status.
+     */
     private static void reconcileRecovery(
             DynamoDbClient dynamoDb,
             SfnClient stepFunctions,
