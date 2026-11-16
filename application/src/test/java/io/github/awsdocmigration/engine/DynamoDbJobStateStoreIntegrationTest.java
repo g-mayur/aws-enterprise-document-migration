@@ -455,4 +455,55 @@ class DynamoDbJobStateStoreIntegrationTest {
                 "us-east-1", 2, 5, 10
         ));
     }
+    @Test
+    void reportsExhaustedShardsAndRecordsManualReviewWithoutResettingAttempts() {
+        String jobId = "dead-letter-job";
+        assertTrue(store.createJob(jobId, 1, NOW));
+        assertTrue(store.transitionJob(jobId, MigrationJobStatus.CREATED,
+                MigrationJobStatus.DISCOVERING, NOW.plusSeconds(1), null));
+        assertTrue(store.createShard(jobId, 0, NOW.plusSeconds(2)));
+
+        assertTrue(store.listDeadLetterShards(jobId).isEmpty());
+        for (int attempt = 1; attempt <= JobStateStore.MAX_SHARD_ATTEMPTS; attempt++) {
+            Instant claimedAt = NOW.plusSeconds(3L + (attempt - 1) * 3L);
+            ShardLease lease = store.claimShard(
+                    jobId, 0, "worker-" + attempt, claimedAt, Duration.ofSeconds(2)
+            ).orElseThrow();
+            assertTrue(store.transitionClaimedShard(
+                    lease, MigrationShardStatus.FAILED,
+                    claimedAt.plusSeconds(1), "failure-" + attempt
+            ));
+        }
+
+        List<DeadLetterShard> report = store.listDeadLetterShards(jobId);
+        assertEquals(1, report.size());
+        DeadLetterShard entry = report.get(0);
+        assertEquals(0, entry.shardNumber());
+        assertEquals(JobStateStore.MAX_SHARD_ATTEMPTS, entry.attemptCount());
+        assertEquals("failure-3", entry.lastError());
+        assertFalse(entry.reviewed());
+
+        assertTrue(store.markShardReviewed(
+                jobId, 0, "operator@example.test", "Source permissions verified; escalate to owner",
+                NOW.plusSeconds(20)
+        ));
+        assertFalse(store.markShardReviewed(
+                jobId, 0, "another-operator", "Duplicate review",
+                NOW.plusSeconds(21)
+        ));
+
+        DeadLetterShard reviewed = store.listDeadLetterShards(jobId).get(0);
+        assertTrue(reviewed.reviewed());
+        assertEquals("operator@example.test", reviewed.reviewedBy());
+        assertEquals("Source permissions verified; escalate to owner", reviewed.reviewNote());
+        assertEquals(NOW.plusSeconds(20).toEpochMilli(), reviewed.reviewedAtEpochMillis());
+
+        MigrationShardState shard = store.getShard(jobId, 0).orElseThrow();
+        assertEquals(MigrationShardStatus.FAILED, shard.status());
+        assertEquals(JobStateStore.MAX_SHARD_ATTEMPTS, shard.attemptCount());
+        assertFalse(store.claimShard(
+                jobId, 0, "worker-after-review", NOW.plusSeconds(22), Duration.ofSeconds(10)
+        ).isPresent(), "Manual review must not silently reset the retry budget");
+    }
+
 }
