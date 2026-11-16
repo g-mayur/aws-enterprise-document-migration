@@ -15,6 +15,10 @@ A checked implementation item means the capability exists in the current starter
 
 ## Outstanding implementation work
 
+- [x] Read-only recovery planning validates the prepared manifest fingerprint, S3 source settings and complete shard registration; explicit operator-confirmed recovery-wave dispatch uses a durable job lock and deterministic Standard Step Functions execution.
+- [ ] Post-execution recovery reconciliation and operator-facing final shard summary implemented.
+- [ ] Automated scheduling/dispatch for failed or never-started shard workers implemented.
+
 - [ ] Multipart upload resume across worker/process restarts implemented.
 - [ ] Automatic ECS dispatch/retry and reconciliation for failed or never-started shard workers implemented.
 - [ ] Dead-letter reporting and operator replay workflow implemented.
