@@ -164,6 +164,12 @@ public final class DynamoDbRecoveryWaveStore {
                 : item.get("selectedShardNumbers").l().stream()
                         .map(value -> Integer.parseInt(value.n()))
                         .toList();
+        List<Integer> normalized = normalizeShards(selected);
+        String selectedDigest = nullableText(item, "selectedShardDigest");
+        if (!digest(normalized).equals(selectedDigest)) {
+            throw new IllegalStateException(
+                    "Persisted recovery-wave shard set does not match its SHA-256 digest");
+        }
         long createdAt = number(item, "createdAt");
         return Optional.of(new RecoveryWaveSnapshot(
                 jobId,
@@ -173,8 +179,8 @@ public final class DynamoDbRecoveryWaveStore {
                 text(item, "executionStatus"),
                 nullableText(item, "executionArn"),
                 nullableText(item, "stateMachineArn"),
-                nullableText(item, "selectedShardDigest"),
-                selected,
+                selectedDigest,
+                normalized,
                 Instant.ofEpochMilli(createdAt)
         ));
     }
