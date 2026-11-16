@@ -215,7 +215,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                                 + "#destinationKey = :destinationKey, "
                                 + "#checksum = :checksum, "
                                 + "#updatedAt = :now "
-                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError, #multipartUpload"
+                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError"
                 )
                 .conditionExpression(
                         "#status = :inProgress AND #leaseOwner = :worker "
@@ -439,7 +439,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         UpdateItemRequest request = UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
-                .updateExpression("REMOVE #multipartUpload SET #updatedAt = :now")
+                .updateExpression("SET #updatedAt = :now REMOVE #multipartUpload")
                 .conditionExpression("#status = :inProgress AND #leaseOwner = :worker "
                         + "AND #leaseExpiresAt > :now")
                 .expressionAttributeNames(Map.of(
@@ -507,6 +507,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
         names.put("#leaseOwner", "leaseOwner");
         names.put("#leaseExpiresAt", "leaseExpiresAt");
         names.put("#lastError", "lastError");
+        names.put("#multipartUpload", "multipartUpload");
         return names;
     }
 
