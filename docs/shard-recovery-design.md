@@ -89,3 +89,33 @@ java -jar document-migration-worker.jar \
 ```
 
 The inspection does not claim shards, dispatch ECS tasks, or write to DynamoDB. A running shard with missing lease-expiry metadata is classified as unknown and is never recommended for immediate replacement. This command is an operator visibility tool, not an automatic recovery mechanism.
+
+## Bounded automatic orchestration contract
+
+The next orchestration layer must be a finite controller around the existing planner, dispatcher, and reconciliation coordinator. It must not introduce a second source of truth for shard ownership or retry counts.
+
+### Required control loop
+
+1. Load and validate the immutable job recovery configuration before inspecting shards. The configuration must bind the source bucket/prefix, destination bucket, manifest S3 URI, version policy, document-state table, job-state table, worker lease duration, document-attempt limit, AWS Region, Standard state-machine ARN, and configured concurrency ceiling.
+2. Build a fresh read-only recovery plan from the exact manifest fingerprint and complete registered shard set.
+3. If no shard is eligible, stop. Report active leases, unknown lease expiry, completed shards, and exhausted shards separately.
+4. Acquire the existing job-scoped recovery-wave lease before dispatch. The durable wave lock and generation fencing remain mandatory.
+5. Dispatch only the selected shard numbers. The worker-side conditional claim remains authoritative; a stale plan must never grant ownership.
+6. Wait only by observing the exact persisted Step Functions execution identity. An ambiguous start, unavailable execution, input mismatch, or unknown status must leave the wave locked and stop the controller.
+7. Reconcile the terminal execution using the existing strongly consistent shard reads, guarded finalizer, and atomic immutable audit transaction.
+8. Continue only after reconciliation commits and a new plan confirms eligible work remains. Enforce a finite controller-level wave ceiling and a bounded overall runtime; do not spin on active leases.
+9. Stop when all shards are terminal, no eligible shard exists, the configured wave ceiling is reached, the execution outcome is ambiguous, or a safety gate fails. Emit an operator-actionable summary.
+
+### Mandatory invariants
+
+- DynamoDB's three total shard claims remain authoritative. Controller iterations and ECS launch retries do not increase that budget.
+- Never dispatch a RUNNING shard with an unexpired lease or unknown lease expiry.
+- Never reset attempt counts, clear leases, or replay an exhausted shard automatically.
+- Never overlap recovery waves for one job. A wave slot is reusable only after its audit-backed reconciliation transaction commits.
+- Preserve the configured Step Functions Map concurrency ceiling; do not infer or raise it from selected shard count.
+- Bind all worker execution settings immutably to the prepared job before enabling unattended recovery. Existing operator-supplied values are not sufficient evidence that a retry uses the original migration configuration.
+- A terminal Step Functions status is not proof that all shards are terminal. Durable shard state and the existing finalizer remain authoritative.
+
+### Enablement gate
+
+Automatic recovery remains disabled until immutable recovery configuration is persisted and verified, the controller has bounded stop conditions, unit and DynamoDB Local tests cover concurrent controllers and ambiguous execution outcomes, and a non-production AWS pilot validates worker termination, lease expiry, duplicate dispatch, and reconciliation. This contract does not authorize a deployment or live migration.
