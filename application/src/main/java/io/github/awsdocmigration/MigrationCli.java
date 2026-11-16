@@ -22,6 +22,7 @@ import io.github.awsdocmigration.engine.RecoveryWavePlanner;
 import io.github.awsdocmigration.engine.RecoveryWaveInputBuilder;
 import io.github.awsdocmigration.engine.DynamoDbRecoveryWaveStore;
 import io.github.awsdocmigration.engine.StepFunctionsRecoveryWaveDispatcher;
+import io.github.awsdocmigration.engine.RecoveryWaveExecutionGuard;
 import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
@@ -464,6 +465,8 @@ public final class MigrationCli {
             throw new IllegalStateException(
                     "Recovery dispatch requires a Standard Step Functions state machine.");
         }
+        RecoveryWaveExecutionGuard.requireNoRunningExecutionForJob(
+                stepFunctions, stateMachineArn, plan.job().jobId());
 
         String sourceBucket = required(arguments, "source-bucket");
         String sourcePrefix = requiredPresent(arguments, "source-prefix");
@@ -571,6 +574,10 @@ public final class MigrationCli {
         if (!"true".equalsIgnoreCase(arguments.get("confirm-recovery"))) {
             throw new IllegalArgumentException(
                     "Dispatch requires explicit --confirm-recovery true. Run --mode plan-recovery first.");
+        }
+        if (!"true".equalsIgnoreCase(arguments.get("confirm-prior-execution-terminal"))) {
+            throw new IllegalArgumentException(
+                    "Dispatch requires --confirm-prior-execution-terminal true after verifying the prior job execution is terminal.");
         }
     }
 
