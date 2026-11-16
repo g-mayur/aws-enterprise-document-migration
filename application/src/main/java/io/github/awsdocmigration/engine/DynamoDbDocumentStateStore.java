@@ -17,6 +17,8 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -213,7 +215,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                                 + "#destinationKey = :destinationKey, "
                                 + "#checksum = :checksum, "
                                 + "#updatedAt = :now "
-                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError"
+                                + "REMOVE #leaseOwner, #leaseExpiresAt, #lastError, #multipartUpload"
                 )
                 .conditionExpression(
                         "#status = :inProgress AND #leaseOwner = :worker "
@@ -260,7 +262,7 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                         "SET #status = :failed, "
                                 + "#lastError = :error, "
                                 + "#updatedAt = :now "
-                                + "REMOVE #leaseOwner, #leaseExpiresAt"
+                                + "REMOVE #leaseOwner, #leaseExpiresAt, #multipartUpload"
                 )
                 .conditionExpression(
                         "#status = :inProgress AND #leaseOwner = :worker "
@@ -316,6 +318,140 @@ public final class DynamoDbDocumentStateStore implements DocumentStateStore {
                 longValue(item, "updatedAt"),
                 identityType
         ));
+    }
+
+    @Override
+    public Optional<MultipartUploadCheckpoint> getMultipartUpload(
+            String jobId,
+            int shardNumber,
+            String documentId,
+            String versionId,
+            VersionIdentityType versionIdentityType
+    ) {
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
+        GetItemResponse response = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
+                .consistentRead(true)
+                .build());
+        if (response == null || !response.hasItem() || response.item().isEmpty()) {
+            return Optional.empty();
+        }
+        AttributeValue stored = response.item().get("multipartUpload");
+        if (stored == null || stored.m() == null || stored.m().isEmpty()) {
+            return Optional.empty();
+        }
+        Map<String, AttributeValue> upload = stored.m();
+        List<MultipartUploadCheckpoint.CompletedPart> parts = new ArrayList<>();
+        AttributeValue storedParts = upload.get("completedParts");
+        if (storedParts != null && storedParts.l() != null) {
+            for (AttributeValue part : storedParts.l()) {
+                parts.add(new MultipartUploadCheckpoint.CompletedPart(
+                        Integer.parseInt(part.m().get("partNumber").n()),
+                        part.m().get("eTag").s()));
+            }
+        }
+        return Optional.of(new MultipartUploadCheckpoint(
+                upload.get("uploadId").s(),
+                upload.get("bucket").s(),
+                upload.get("key").s(),
+                Long.parseLong(upload.get("contentLength").n()),
+                Long.parseLong(upload.get("partSize").n()),
+                upload.get("metadataFingerprint").s(),
+                parts));
+    }
+
+    @Override
+    public boolean saveMultipartUpload(
+            String jobId,
+            int shardNumber,
+            String documentId,
+            String versionId,
+            VersionIdentityType versionIdentityType,
+            String workerId,
+            MultipartUploadCheckpoint checkpoint,
+            Instant now
+    ) {
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
+        requireText(workerId, "workerId");
+        Objects.requireNonNull(checkpoint, "Multipart checkpoint is required");
+        Objects.requireNonNull(now, "Current time is required");
+
+        Map<String, AttributeValue> upload = new HashMap<>();
+        upload.put("uploadId", string(checkpoint.uploadId()));
+        upload.put("bucket", string(checkpoint.bucket()));
+        upload.put("key", string(checkpoint.key()));
+        upload.put("contentLength", number(checkpoint.contentLength()));
+        upload.put("partSize", number(checkpoint.partSize()));
+        upload.put("metadataFingerprint", string(checkpoint.metadataFingerprint().toLowerCase()));
+        List<AttributeValue> parts = new ArrayList<>();
+        for (MultipartUploadCheckpoint.CompletedPart part : checkpoint.completedParts()) {
+            Map<String, AttributeValue> encoded = new HashMap<>();
+            encoded.put("partNumber", number(part.partNumber()));
+            encoded.put("eTag", string(part.eTag()));
+            parts.add(AttributeValue.builder().m(encoded).build());
+        }
+        upload.put("completedParts", AttributeValue.builder().l(parts).build());
+
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
+        values.put(":worker", string(workerId));
+        values.put(":now", number(now.toEpochMilli()));
+        values.put(":checkpoint", AttributeValue.builder().m(upload).build());
+
+        UpdateItemRequest request = UpdateItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
+                .updateExpression("SET #multipartUpload = :checkpoint, #updatedAt = :now")
+                .conditionExpression("#status = :inProgress AND #leaseOwner = :worker "
+                        + "AND #leaseExpiresAt > :now")
+                .expressionAttributeNames(Map.of(
+                        "#multipartUpload", "multipartUpload",
+                        "#updatedAt", "updatedAt",
+                        "#status", "status",
+                        "#leaseOwner", "leaseOwner",
+                        "#leaseExpiresAt", "leaseExpiresAt"))
+                .expressionAttributeValues(values)
+                .returnValues(ReturnValue.NONE)
+                .build();
+        return updateOnlyIfLeaseOwned(request);
+    }
+
+    @Override
+    public boolean clearMultipartUpload(
+            String jobId,
+            int shardNumber,
+            String documentId,
+            String versionId,
+            VersionIdentityType versionIdentityType,
+            String workerId,
+            Instant now
+    ) {
+        validateIdentity(jobId, shardNumber, documentId, versionId, versionIdentityType);
+        requireText(workerId, "workerId");
+        Objects.requireNonNull(now, "Current time is required");
+
+        Map<String, AttributeValue> values = new HashMap<>();
+        values.put(":inProgress", string(DocumentMigrationStatus.IN_PROGRESS.name()));
+        values.put(":worker", string(workerId));
+        values.put(":now", number(now.toEpochMilli()));
+
+        UpdateItemRequest request = UpdateItemRequest.builder()
+                .tableName(tableName)
+                .key(key(jobId, shardNumber, documentId, versionId, versionIdentityType))
+                .updateExpression("REMOVE #multipartUpload SET #updatedAt = :now")
+                .conditionExpression("#status = :inProgress AND #leaseOwner = :worker "
+                        + "AND #leaseExpiresAt > :now")
+                .expressionAttributeNames(Map.of(
+                        "#multipartUpload", "multipartUpload",
+                        "#updatedAt", "updatedAt",
+                        "#status", "status",
+                        "#leaseOwner", "leaseOwner",
+                        "#leaseExpiresAt", "leaseExpiresAt"))
+                .expressionAttributeValues(values)
+                .returnValues(ReturnValue.NONE)
+                .build();
+        return updateOnlyIfLeaseOwned(request);
     }
 
     private boolean updateOnlyIfLeaseOwned(UpdateItemRequest request) {
