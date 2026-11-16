@@ -42,7 +42,7 @@
       "Action": [
         "states:DescribeExecution"
       ],
-      "Resource": "arn:aws:states:REGION:ACCOUNT_ID:execution:STATE_MACHINE_NAME:recovery-*"
+      "Resource": "arn:aws:states:REGION:ACCOUNT_ID:execution:STATE_MACHINE_NAME:*"
     }
   ]
 }
