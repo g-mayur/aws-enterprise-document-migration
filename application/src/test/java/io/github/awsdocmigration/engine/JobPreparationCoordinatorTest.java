@@ -427,6 +427,59 @@ class JobPreparationCoordinatorTest {
         }
 
         @Override
+        public List<DeadLetterShard> listDeadLetterShards(String jobId) {
+            return shardsFor(jobId).stream()
+                    .filter(shard -> shard.status() == MigrationShardStatus.FAILED
+                            && shard.attemptCount() >= JobStateStore.MAX_SHARD_ATTEMPTS)
+                    .map(shard -> new DeadLetterShard(
+                            shard.jobId(),
+                            shard.shardNumber(),
+                            shard.attemptCount(),
+                            shard.lastError(),
+                            shard.createdAtEpochMillis(),
+                            shard.updatedAtEpochMillis(),
+                            shard.reviewedBy(),
+                            shard.reviewNote(),
+                            shard.reviewedAtEpochMillis()
+                    ))
+                    .toList();
+        }
+
+        @Override
+        public boolean markShardReviewed(
+                String jobId,
+                int shardNumber,
+                String reviewer,
+                String reviewNote,
+                Instant now
+        ) {
+            String key = shardKey(jobId, shardNumber);
+            MigrationShardState current = shards.get(key);
+            if (current == null
+                    || current.status() != MigrationShardStatus.FAILED
+                    || current.attemptCount() < JobStateStore.MAX_SHARD_ATTEMPTS
+                    || current.reviewedAtEpochMillis() != null
+                    || reviewer == null || reviewer.isBlank()
+                    || now == null) {
+                return false;
+            }
+            shards.put(key, new MigrationShardState(
+                    current.jobId(),
+                    current.shardNumber(),
+                    current.status(),
+                    current.workerId(),
+                    current.lastError(),
+                    current.attemptCount(),
+                    current.createdAtEpochMillis(),
+                    now.toEpochMilli(),
+                    reviewer,
+                    reviewNote,
+                    now.toEpochMilli()
+            ));
+            return true;
+        }
+
+        @Override
         public boolean transitionShard(
                 String jobId,
                 int shardNumber,
