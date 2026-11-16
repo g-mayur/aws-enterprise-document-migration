@@ -223,17 +223,25 @@ class MigrationCliTest {
     }
 
     @Test
-    void recoveryDispatchRequiresExplicitOperatorConfirmation() {
+    void recoveryDispatchRequiresExplicitOperatorAndPriorExecutionConfirmation() {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> MigrationCli.validateRecoveryConfirmation(Map.of("confirm-recovery", "false"))
         );
         assertThrows(
                 IllegalArgumentException.class,
-                () -> MigrationCli.validateRecoveryConfirmation(Map.of())
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of("confirm-recovery", "true"))
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of(
+                        "confirm-recovery", "true",
+                        "confirm-prior-execution-terminal", "false"))
         );
         assertDoesNotThrow(
-                () -> MigrationCli.validateRecoveryConfirmation(Map.of("confirm-recovery", "true"))
+                () -> MigrationCli.validateRecoveryConfirmation(Map.of(
+                        "confirm-recovery", "true",
+                        "confirm-prior-execution-terminal", "true"))
         );
     }
 
