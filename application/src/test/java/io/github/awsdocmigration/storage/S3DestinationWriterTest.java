@@ -294,7 +294,7 @@ class S3DestinationWriterTest {
         when(s3.listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class)))
                 .thenReturn(software.amazon.awssdk.services.s3.model.ListPartsResponse.builder()
                         .parts(software.amazon.awssdk.services.s3.model.Part.builder()
-                                .partNumber(1).eTag("remote-etag-1").build())
+                                .partNumber(1).size(PART_SIZE).eTag("remote-etag-1").build())
                         .isTruncated(false).build());
         when(s3.uploadPart(any(UploadPartRequest.class), any(RequestBody.class)))
                 .thenReturn(UploadPartResponse.builder().eTag("remote-etag-2").build());
@@ -318,6 +318,97 @@ class S3DestinationWriterTest {
         verify(s3).completeMultipartUpload(completeCaptor.capture());
         assertEquals(2, completeCaptor.getValue().multipartUpload().parts().size());
         verify(stateStore).clearMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any());
+    }
+
+    @Test
+    void restartsResumeWhenRemoteUploadContainsUnexpectedPartNumber()
+            throws Exception {
+        byte[] content = new byte[PART_SIZE + 1];
+        DocumentStateStore stateStore = mock(DocumentStateStore.class);
+        String fingerprint = metadataFingerprint(Map.of(
+                "document-id", "document-1",
+                "source-version-id", "version-1",
+                "sha256", SHA256));
+        MultipartUploadCheckpoint checkpoint = new MultipartUploadCheckpoint(
+                "upload-stale", BUCKET, KEY, content.length, PART_SIZE,
+                fingerprint, java.util.List.of());
+        when(stateStore.getMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(Optional.of(checkpoint));
+        when(stateStore.saveMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any(), any())).thenReturn(true);
+        when(stateStore.clearMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any())).thenReturn(true);
+        when(s3.listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class)))
+                .thenReturn(software.amazon.awssdk.services.s3.model.ListPartsResponse.builder()
+                        .parts(software.amazon.awssdk.services.s3.model.Part.builder()
+                                .partNumber(3).size(1L).eTag("unexpected-etag").build())
+                        .isTruncated(false).build());
+        when(s3.createMultipartUpload(any(CreateMultipartUploadRequest.class)))
+                .thenReturn(CreateMultipartUploadResponse.builder()
+                        .uploadId("upload-fresh").build());
+        when(s3.uploadPart(any(UploadPartRequest.class), any(RequestBody.class)))
+                .thenAnswer(invocation -> {
+                    UploadPartRequest request = invocation.getArgument(0);
+                    return UploadPartResponse.builder()
+                            .eTag("fresh-etag-" + request.partNumber()).build();
+                });
+
+        MultipartUploadContext context = new MultipartUploadContext(
+                stateStore, "job-1", 0, "worker-1", "document-1",
+                "version-1", VersionIdentityType.SOURCE_VERSION);
+
+        writer.write(record(content.length), KEY,
+                new ByteArrayInputStream(content), SHA256, context);
+
+        verify(s3).abortMultipartUpload(argThat(request ->
+                "upload-stale".equals(request.uploadId())));
+        verify(s3).createMultipartUpload(any(CreateMultipartUploadRequest.class));
+        ArgumentCaptor<UploadPartRequest> partCaptor =
+                ArgumentCaptor.forClass(UploadPartRequest.class);
+        verify(s3, times(2)).uploadPart(partCaptor.capture(), any(RequestBody.class));
+        assertEquals(java.util.List.of(1, 2), partCaptor.getAllValues().stream()
+                .map(UploadPartRequest::partNumber).toList());
+        verify(stateStore).clearMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any(),
+                anyString(), any());
+    }
+
+    @Test
+    void rejectsTruncatedListPartsResponseWithoutAdvancingMarker() throws Exception {
+        byte[] content = new byte[PART_SIZE + 1];
+        DocumentStateStore stateStore = mock(DocumentStateStore.class);
+        String fingerprint = metadataFingerprint(Map.of(
+                "document-id", "document-1",
+                "source-version-id", "version-1",
+                "sha256", SHA256));
+        MultipartUploadCheckpoint checkpoint = new MultipartUploadCheckpoint(
+                "upload-paged", BUCKET, KEY, content.length, PART_SIZE,
+                fingerprint, java.util.List.of());
+        when(stateStore.getMultipartUpload(
+                anyString(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(Optional.of(checkpoint));
+        when(s3.listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class)))
+                .thenReturn(software.amazon.awssdk.services.s3.model.ListPartsResponse.builder()
+                        .isTruncated(true).build());
+
+        MultipartUploadContext context = new MultipartUploadContext(
+                stateStore, "job-1", 0, "worker-1", "document-1",
+                "version-1", VersionIdentityType.SOURCE_VERSION);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> writer.write(record(content.length), KEY,
+                        new ByteArrayInputStream(content), SHA256, context));
+
+        assertTrue(failure.getMessage().contains("without an advancing part-number marker"));
+        verify(s3).listParts(any(software.amazon.awssdk.services.s3.model.ListPartsRequest.class));
+        verify(s3, never()).createMultipartUpload(any(CreateMultipartUploadRequest.class));
+        verify(s3, never()).abortMultipartUpload(any(AbortMultipartUploadRequest.class));
+        verify(stateStore, never()).clearMultipartUpload(
                 anyString(), anyInt(), anyString(), anyString(), any(),
                 anyString(), any());
     }
