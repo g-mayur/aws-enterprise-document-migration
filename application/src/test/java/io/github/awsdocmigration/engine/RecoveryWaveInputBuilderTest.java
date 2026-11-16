@@ -54,6 +54,15 @@ class RecoveryWaveInputBuilderTest {
     }
 
     @Test
+    void rejectsInputThatExceedsStepFunctionsPayloadLimit() {
+        List<Integer> selected = java.util.stream.IntStream.range(0, 1000).boxed().toList();
+        assertThrows(IllegalArgumentException.class, () -> RecoveryWaveInputBuilder.build(
+                "job-1", "source", "", "destination", "s3://staging/manifest", 1000,
+                selected, "documents", "jobs", VersionPolicy.ALL_VERSIONS,
+                "us-east-1", 300, 5, "wave"));
+    }
+
+    @Test
     void rejectsDuplicateOrOutOfRangeShardNumbers() {
         assertThrows(IllegalArgumentException.class, () -> RecoveryWaveInputBuilder.build(
                 "job-1", "source", "", "destination", "s3://staging/manifest", 2,
