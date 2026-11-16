@@ -109,6 +109,10 @@ public final class MigrationCli {
                         dynamoDb, stepFunctions, arguments
                 );
 
+                case "auto-recover" -> autoRecover(
+                        dynamoDb, s3, stepFunctions, arguments, region
+                );
+
                 case "migrate" -> migrate(
                         createSource(required(arguments, "source-type"), arguments, s3),
                         s3,
