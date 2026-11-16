@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadPreparedMigrationJobAndShards",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/JOB_STATE_TABLE"
+    },
+    {
+      "Sid": "UpdateRecoveryWaveCoordinationOnlyInJobStateTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/JOB_STATE_TABLE"
+    },
+    {
+      "Sid": "ReadExactPreparedManifest",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::MANIFEST_BUCKET/APPROVED_MANIFEST_PREFIX/*"
+    },
+    {
+      "Sid": "InspectAndStartApprovedStandardStateMachine",
+      "Effect": "Allow",
+      "Action": [
+        "states:DescribeStateMachine",
+        "states:StartExecution",
+        "states:ListExecutions"
+      ],
+      "Resource": "arn:aws:states:REGION:ACCOUNT_ID:stateMachine:STATE_MACHINE_NAME"
+    },
+    {
+      "Sid": "DescribeExecutionsForApprovedStateMachine",
+      "Effect": "Allow",
+      "Action": [
+        "states:DescribeExecution"
+      ],
+      "Resource": "arn:aws:states:REGION:ACCOUNT_ID:execution:STATE_MACHINE_NAME:recovery-*"
+    }
+  ]
+}
