@@ -30,6 +30,7 @@ import io.github.awsdocmigration.engine.ManifestReader;
 import io.github.awsdocmigration.engine.ManifestWriter;
 import io.github.awsdocmigration.storage.DestinationWriter;
 import io.github.awsdocmigration.storage.S3DestinationWriter;
+import io.github.awsdocmigration.storage.S3ClientFactory;
 import io.github.awsdocmigration.util.Checksums;
 
 import software.amazon.awssdk.regions.Region;
@@ -73,9 +74,10 @@ public final class MigrationCli {
         );
 
         try (
-                S3Client s3 = S3Client.builder()
-                        .region(Region.of(region))
-                        .build();
+                S3Client s3 = S3ClientFactory.create(
+                        Region.of(region),
+                        System.getenv("S3_ENDPOINT_URL")
+                );
                 DynamoDbClient dynamoDb = DynamoDbClient.builder()
                         .region(Region.of(region))
                         .build();
