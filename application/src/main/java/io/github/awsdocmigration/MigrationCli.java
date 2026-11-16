@@ -356,10 +356,6 @@ public final class MigrationCli {
     }
 
     /**
-     * Prepares the durable job and registers its complete shard plan.
-     * Run this once before launching the independent shard workers.
-     */
-    /**
      * Binds exact recovery execution settings to an already prepared job.
      * The manifest fingerprint is recalculated from S3 before the immutable bind.
      */
@@ -424,6 +420,10 @@ public final class MigrationCli {
                 configuration.maximumConcurrentShards());
     }
 
+    /**
+     * Prepares the durable job and registers its complete shard plan.
+     * Run this once before launching the independent shard workers.
+     */
     private static void prepareJob(
             DynamoDbClient dynamoDb,
             Map<String, String> arguments
