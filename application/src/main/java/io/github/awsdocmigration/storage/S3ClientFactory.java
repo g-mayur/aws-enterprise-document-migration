@@ -31,16 +31,6 @@ public final class S3ClientFactory {
                             S3Configuration.builder()
                                     .pathStyleAccessEnabled(true)
                                     .build()
-                    )
-                    // Older S3-compatible test services may not implement the
-                    // SDK's newer optional default CRC32 request checksums.
-                    // Keep those defaults for real AWS clients; local endpoints
-                    // use checksums only when an operation explicitly requires them.
-                    .overrideConfiguration(
-                            ClientOverrideConfiguration.builder()
-                                    .requestChecksumCalculation(
-                                            RequestChecksumCalculation.WHEN_REQUIRED)
-                                    .build()
                     );
         }
 
