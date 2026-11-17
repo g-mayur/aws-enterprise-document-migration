@@ -1,7 +1,6 @@
 package io.github.awsdocmigration.storage;
 
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
-import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -30,6 +29,18 @@ public final class S3ClientFactory {
                     .serviceConfiguration(
                             S3Configuration.builder()
                                     .pathStyleAccessEnabled(true)
+                                    .build()
+                    )
+                    // LocalStack does not support the SDK's optional CRC32
+                    // checksums on multipart part uploads. Keep AWS defaults
+                    // unchanged for clients that use the real AWS endpoint.
+                    .overrideConfiguration(
+                            ClientOverrideConfiguration.builder()
+                                    .putAdvancedOption(
+                                            software.amazon.awssdk.core.SdkAdvancedClientOption
+                                                    .DISABLE_HOST_PREFIX_INJECTION,
+                                            false
+                                    )
                                     .build()
                     );
         }
