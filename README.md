@@ -37,20 +37,23 @@ Requirements: Git, Java 17+, Maven 3.9+. Docker is recommended so the script can
 
 ## Architecture
 
-    Source system(s)
-      | connector plugin (filesystem / S3 / custom DMS / SaaS API)
-      v
-    Discovery + manifest shards (JSONL in S3)
-      v
-    ECS Fargate migration workers
-      |-- stream source content
-      |-- calculate/verify SHA-256
-      |-- write deterministic S3 object key
-      |-- persist migration state / retry metadata
-      v
-    Amazon S3 destination + DynamoDB state
+The diagram below is a conceptual view of the repository's current architecture. It describes the intended AWS components; it does not imply that the repository has been deployed or production-validated in an AWS account.
 
-The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease and the writer can resume after a worker/process restart by reconciling the checkpoint with S3's uploaded parts. Resume behavior still requires validation in the target AWS environment.
+![AWS Enterprise Document Migration reference architecture](docs/images/architecture.svg)
+
+**High-level flow:** Source connectors discover documents and prepare JSONL manifests. ECS/Fargate workers process the manifest work, verify content with SHA-256, and write deterministic object keys to Amazon S3. DynamoDB stores migration state, leases and recovery checkpoints; Step Functions provides workflow orchestration.
+
+## Migration lifecycle
+
+![Document migration lifecycle](docs/images/migration-lifecycle.svg)
+
+Discovery is separated from transfer. The manifest provides a durable, shardable input for bounded worker execution. Successful work is committed to migration state, while failed work follows an explicit inspection and reconciliation path. The current recovery controller is explicitly invoked; unattended scheduling is not included.
+
+## Integrity and resumable uploads
+
+![Integrity checks and resumable S3 transfer](docs/images/integrity-and-recovery.svg)
+
+The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease and the writer can resume after a worker/process restart by reconciling the checkpoint with S3's uploaded parts. Resume behavior still requires validation in the target AWS environment.
 
 ## Configure for your environment
 
