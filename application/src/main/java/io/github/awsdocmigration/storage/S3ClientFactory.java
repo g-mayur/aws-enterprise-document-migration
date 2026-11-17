@@ -1,5 +1,7 @@
 package io.github.awsdocmigration.storage;
 
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -28,6 +30,16 @@ public final class S3ClientFactory {
                     .serviceConfiguration(
                             S3Configuration.builder()
                                     .pathStyleAccessEnabled(true)
+                                    .build()
+                    )
+                    // Older S3-compatible test services may not implement the
+                    // SDK's newer optional default CRC32 request checksums.
+                    // Keep those defaults for real AWS clients; local endpoints
+                    // use checksums only when an operation explicitly requires them.
+                    .overrideConfiguration(
+                            ClientOverrideConfiguration.builder()
+                                    .requestChecksumCalculation(
+                                            RequestChecksumCalculation.WHEN_REQUIRED)
                                     .build()
                     );
         }
