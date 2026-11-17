@@ -1,20 +1,36 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: ''
+about: Suggest a feature or improvement for AWS Enterprise Document Migration.
+title: "[FEATURE]"
+labels: enhancement
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+## Problem Statement
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+Describe the problem or limitation this feature would solve.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+## Proposed Solution
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+Describe the feature or enhancement you would like to see.
+
+## Use Case
+
+Explain how this feature would help users or improve document migration.
+
+## AWS Services Involved
+
+Mention relevant AWS services, if applicable (e.g., S3, IAM, KMS, SQS).
+
+## Expected Benefits
+
+Describe the expected improvements in functionality, performance, scalability, security, or usability.
+
+## Alternatives Considered
+
+Describe any alternative solutions or approaches you have considered.
+
+## Additional Context
+
+Add relevant examples, diagrams, screenshots, or references.
