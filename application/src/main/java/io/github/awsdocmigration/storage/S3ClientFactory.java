@@ -1,5 +1,7 @@
 package io.github.awsdocmigration.storage;
 
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -25,6 +27,8 @@ public final class S3ClientFactory {
         if (endpointUrl != null && !endpointUrl.isBlank()) {
             URI endpoint = parseEndpoint(endpointUrl);
             builder.endpointOverride(endpoint)
+                    .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                    .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
                     .serviceConfiguration(
                             S3Configuration.builder()
                                     .pathStyleAccessEnabled(true)
