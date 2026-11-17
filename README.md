@@ -37,20 +37,21 @@ Requirements: Git, Java 17+, Maven 3.9+. Docker is recommended so the script can
 
 ## Architecture
 
-    Source system(s)
-      | connector plugin (filesystem / S3 / custom DMS / SaaS API)
-      v
-    Discovery + manifest shards (JSONL in S3)
-      v
-    ECS Fargate migration workers
-      |-- stream source content
-      |-- calculate/verify SHA-256
-      |-- write deterministic S3 object key
-      |-- persist migration state / retry metadata
-      v
-    Amazon S3 destination + DynamoDB state
+![AWS Enterprise Document Migration reference architecture](docs/images/01-reference-architecture.png)
 
 The framework deliberately separates discovery from transfer. Do not attempt to enumerate hundreds of millions of records in one Lambda invocation or one in-memory manifest. The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. Ensure the worker has sufficient ephemeral disk space. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease and the writer can resume after a worker/process restart by reconciling the checkpoint with S3's uploaded parts. Resume behavior still requires validation in the target AWS environment.
+
+## Migration lifecycle
+
+![Document migration lifecycle](docs/images/02-migration-lifecycle.png)
+
+The workflow separates source discovery and manifest preparation from bounded transfer execution. Prepared manifest shards provide durable work units for migration workers. Each document is processed with checksum verification and the configured destination-key/version policy. Migration and shard state are persisted so operators can inspect outcomes and reconcile eligible work.
+
+## Integrity and recovery
+
+![Integrity verification and multipart recovery](docs/images/03-integrity-and-recovery.png)
+
+The current CLI stages each document to local temporary disk for size and checksum verification. The S3 writer uses a single PUT up to 64 MiB and sequential multipart upload above that threshold, spooling one part at a time to temporary disk. In context-backed sharded execution, multipart checkpoints are persisted under the active document lease; after a worker or process restart, the writer reconciles the checkpoint with S3's uploaded parts before resuming eligible work. Recovery is explicitly invoked through the bounded foreground controller and requires confirmation; unattended scheduled recovery is not included. Resume behavior still requires validation in the target AWS environment.
 
 ## Configure for your environment
 
