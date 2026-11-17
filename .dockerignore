@@ -1,5 +1,0 @@
-.git
-**/target
-**/.terraform
-**/*.tfstate*
-.env
