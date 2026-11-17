@@ -1,7 +1,5 @@
 package io.github.awsdocmigration.storage;
 
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
-import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -30,12 +28,6 @@ public final class S3ClientFactory {
                     .serviceConfiguration(
                             S3Configuration.builder()
                                     .pathStyleAccessEnabled(true)
-                                    .build()
-                    )
-                    .overrideConfiguration(
-                            ClientOverrideConfiguration.builder()
-                                    .requestChecksumCalculation(
-                                            RequestChecksumCalculation.WHEN_REQUIRED)
                                     .build()
                     );
         }
